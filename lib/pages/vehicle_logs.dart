@@ -1,6 +1,5 @@
 // lib/pages/vehicle_logs.dart
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
@@ -146,13 +145,13 @@ class _VehicleLogsPageState extends State<VehicleLogsPage> {
 
   @override
   Widget build(BuildContext context) {
-    const Color _primaryBlue = Color(0xFF1E3A8A);
-    const Color _textGray = Color(0xFF64748B);
-    const Color _lightGray = Color(0xFFF8FAFC);
+    const Color primaryBlue = Color(0xFF1E3A8A);
+    const Color textGray = Color(0xFF64748B);
+    const Color lightGray = Color(0xFFF8FAFC);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Vehicle Logs'), backgroundColor: _primaryBlue),
-      backgroundColor: _lightGray,
+      appBar: AppBar(title: const Text('Vehicle Logs'), backgroundColor: primaryBlue),
+      backgroundColor: lightGray,
       body: SafeArea(
         child: _loading
             ? const Center(child: CircularProgressIndicator())
@@ -177,7 +176,7 @@ class _VehicleLogsPageState extends State<VehicleLogsPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: const [
-                Icon(Icons.history, size: 64, color: _primaryBlue),
+                Icon(Icons.history, size: 64, color: primaryBlue),
                 SizedBox(height: 12),
                 Text('No logs available', style: TextStyle(fontSize: 18)),
                 SizedBox(height: 8),
@@ -256,16 +255,16 @@ class _VehicleLogsPageState extends State<VehicleLogsPage> {
                             Row(
                               children: [
                                 if (dlNumber.toString().isNotEmpty)
-                                  Expanded(child: Text('DL: ${dlNumber.toString()}', style: TextStyle(fontSize: 13, color: _textGray))),
+                                  Expanded(child: Text('DL: ${dlNumber.toString()}', style: TextStyle(fontSize: 13, color: textGray))),
                                 if (rcNumber.toString().isNotEmpty)
-                                  Expanded(child: Text('RC: ${rcNumber.toString()}', style: TextStyle(fontSize: 13, color: _textGray))),
+                                  Expanded(child: Text('RC: ${rcNumber.toString()}', style: TextStyle(fontSize: 13, color: textGray))),
                               ],
                             ),
                             const SizedBox(height: 8),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(_formatTimestamp(ts), style: const TextStyle(fontSize: 12, color: _textGray)),
+                                Text(_formatTimestamp(ts), style: const TextStyle(fontSize: 12, color: textGray)),
                                 TextButton(
                                   onPressed: () {
                                     // Use the builder-context for safe pop

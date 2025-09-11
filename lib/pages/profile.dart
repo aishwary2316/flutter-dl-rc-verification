@@ -6,14 +6,14 @@ class ProfilePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const Color _primaryBlue = Color(0xFF1E3A8A);
-    const Color _textGray = Color(0xFF64748B);
-    const Color _lightGray = Color(0xFFF8FAFC);
+    const Color primaryBlue = Color(0xFF1E3A8A);
+    const Color textGray = Color(0xFF64748B);
+    const Color lightGray = Color(0xFFF8FAFC);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile'), backgroundColor: _primaryBlue),
+      appBar: AppBar(title: const Text('Profile'), backgroundColor: primaryBlue),
       body: Container(
-        color: _lightGray,
+        color: lightGray,
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -29,7 +29,7 @@ class ProfilePage extends StatelessWidget {
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.person, size: 64, color: _primaryBlue),
+                    Icon(Icons.person, size: 64, color: primaryBlue),
                     const SizedBox(height: 16),
                     const Text('Profile', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),

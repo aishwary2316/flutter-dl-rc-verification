@@ -1,6 +1,5 @@
 // lib/pages/home_page.dart
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -12,6 +11,8 @@ import 'alert_logs.dart';
 import 'blacklist_management.dart';
 import 'settings.dart';
 import 'profile.dart';
+
+import 'home.dart';
 
 class HomePage extends StatefulWidget {
   final String userName;
@@ -27,63 +28,25 @@ class HomePage extends StatefulWidget {
     required this.role,
     required this.isActive,
     required this.loginTime,
-
   });
-
-
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-
 class _HomePageState extends State<HomePage> {
-  // Drawer colors (unchanged as requested)
-  static const Color _drawerBlue = Color(0xFF162170);
-  static const Color _drawerTopBand = Color(0xFF1A2A83);
-  static const Color _selectedBand = Color(0xFF0E1A55);
-
-  // App theme colors to match government portal
-  static const Color _primaryBlue = Color(0xFF1E3A8A);
   static const Color _headerBlue = Color(0xFF1E40AF);
-  static const Color _lightGray = Color(0xFFF8FAFC);
-  static const Color _borderGray = Color(0xFFE2E8F0);
-  static const Color _textGray = Color(0xFF64748B);
-
   final double _menuWidth = 220;
   late bool _isActive;
   int _selectedIndex = 0;
-
-  // Controllers & state for the Home UI
-  final TextEditingController _dlController = TextEditingController();
-  final TextEditingController _rcController = TextEditingController();
-
-  String? _dlImageName;
-  String? _rcImageName;
-  String? _driverImageName;
-
-  // Loading states for future API integration
-  bool _isVerifying = false;
 
   @override
   void initState() {
     super.initState();
     _isActive = widget.isActive;
-
-  }
-
-  @override
-  void dispose() {
-    _dlController.dispose();
-    _rcController.dispose();
-    super.dispose();
   }
 
   Future<void> _logout() async {
-    // Clear any in-memory API session if you have one
-    // await api.localLogout(); // uncomment if using ApiService
-
-    // Clear SharedPreferences (user metadata)
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('userName');
     await prefs.remove('userEmail');
@@ -91,11 +54,9 @@ class _HomePageState extends State<HomePage> {
     await prefs.remove('isActive');
     await prefs.remove('loginTime');
 
-    // Clear JWT/token from secure storage
-    final secureStorage = const FlutterSecureStorage();
+    const secureStorage = FlutterSecureStorage();
     await secureStorage.delete(key: 'auth_token');
 
-    // Navigate to login screen and remove all previous routes
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const AuthPage()),
@@ -103,479 +64,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // File picker methods (unchanged core logic)
-  Future<void> _pickDlImage() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
-    );
-    if (result != null && result.files.isNotEmpty) {
-      setState(() {
-        _dlImageName = result.files.single.name;
-        // TODO: Integrate with OCR API when ready
-        _dlController.text = ''; // Will be populated by OCR
-      });
-    }
-  }
-
-  Future<void> _pickRcImage() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
-    );
-    if (result != null && result.files.isNotEmpty) {
-      setState(() {
-        _rcImageName = result.files.single.name;
-        // TODO: Integrate with RC OCR API when ready
-        _rcController.text = ''; // Will be populated by OCR
-      });
-    }
-  }
-
-  Future<void> _pickDriverImage() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image);
-    if (result != null && result.files.isNotEmpty) {
-      setState(() {
-        _driverImageName = result.files.single.name;
-      });
-    }
-  }
-
-  // Enhanced Home page UI matching the government portal design
-  Widget _buildHomeContent() {
-    return Container(
-      color: _lightGray,
-      child: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Header section with government branding
-            Container(
-              width: double.infinity,
-              color: Colors.white,
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  // Government logo and ministry name
-                  // Row(
-                  //   children: [
-                  //     Container(
-                  //       padding: const EdgeInsets.all(8),
-                  //       decoration: BoxDecoration(
-                  //         color: Colors.grey.shade100,
-                  //         borderRadius: BorderRadius.circular(8),
-                  //       ),
-                  //       child: Icon(
-                  //         Icons.account_balance,
-                  //         size: 40,
-                  //         color: _primaryBlue,
-                  //       ),
-                  //     ),
-                  //     const SizedBox(width: 16),
-                  //     Expanded(
-                  //       child: Column(
-                  //         crossAxisAlignment: CrossAxisAlignment.start,
-                  //         children: [
-                  //           Text(
-                  //             'GOVERNMENT OF INDIA',
-                  //             style: TextStyle(
-                  //               fontSize: 12,
-                  //               fontWeight: FontWeight.w500,
-                  //               color: _textGray,
-                  //               letterSpacing: 0.5,
-                  //             ),
-                  //           ),
-                  //           const SizedBox(height: 4),
-                  //           Text(
-                  //             'MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
-                  //             style: TextStyle(
-                  //               fontSize: 16,
-                  //               fontWeight: FontWeight.bold,
-                  //               color: _primaryBlue,
-                  //               letterSpacing: 0.3,
-                  //             ),
-                  //           ),
-                  //         ],
-                  //       ),
-                  //     ),
-                  //   ],
-                  // ),
-                  // const SizedBox(height: 20),
-                  // Main title
-                  Text(
-                    'Driving License and Vehicle Registration Certificate Verification Portal',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: _primaryBlue,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // show logged-in user summary line
-                  // Row(
-                  //   mainAxisAlignment: MainAxisAlignment.center,
-                  //   children: [
-                  //     Text('Signed in as ${widget.userName} (${widget.userEmail})',
-                  //         style: TextStyle(fontSize: 12, color: _textGray)),
-                  //     const SizedBox(width: 12),
-                  //     if (_isActive)
-                  //       Chip(label: const Text('Active'), backgroundColor: Colors.green.shade50)
-                  //     else
-                  //       Chip(label: const Text('Inactive'), backgroundColor: Colors.grey.shade200),
-                  //   ],
-                  // ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Main form container
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Driving License Section
-                  _buildSectionHeader(
-                    icon: Icons.credit_card,
-                    title: 'Upload Driving License',
-                    subtitle: 'Upload your driving license document',
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildFileUploadCard(
-                    label: 'Choose Driving License File',
-                    fileName: _dlImageName,
-                    onTap: _pickDlImage,
-                    icon: Icons.upload_file,
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  _buildTextInput(
-                    controller: _dlController,
-                    label: 'Driving License Number',
-                    hint: 'Select image or enter manually',
-                    prefixIcon: Icons.confirmation_number,
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // Vehicle Registration Section
-                  _buildSectionHeader(
-                    icon: Icons.directions_car,
-                    title: 'Upload Vehicle Registration Number (Number Plate Number)',
-                    subtitle: 'Upload your vehicle registration certificate',
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildFileUploadCard(
-                    label: 'Choose Vehicle Registration File',
-                    fileName: _rcImageName,
-                    onTap: _pickRcImage,
-                    icon: Icons.upload_file,
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  _buildTextInput(
-                    controller: _rcController,
-                    label: 'Vehicle Number',
-                    hint: 'Select image or enter manually',
-                    prefixIcon: Icons.directions_car,
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // Driver Image Section
-                  _buildSectionHeader(
-                    icon: Icons.person,
-                    title: 'Upload Driver Image',
-                    subtitle: 'Upload a clear photo of the driver',
-                  ),
-                  const SizedBox(height: 16),
-
-                  _buildFileUploadCard(
-                    label: 'Choose Driver Image File',
-                    fileName: _driverImageName,
-                    onTap: _pickDriverImage,
-                    icon: Icons.person_add_alt_1,
-                  ),
-
-                  const SizedBox(height: 32),
-
-                  // Verify Information Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: _isVerifying ? null : _handleVerification,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _primaryBlue,
-                        foregroundColor: Colors.white,
-                        elevation: 2,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        disabledBackgroundColor: Colors.grey.shade400,
-                      ),
-                      child: _isVerifying
-                          ? Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          const Text('Verifying...', style: TextStyle(fontSize: 16)),
-                        ],
-                      )
-                          : Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.verified_user, size: 20),
-                          const SizedBox(width: 8),
-                          const Text('Verify Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Info note
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.blue.shade600, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'AI-powered verification will extract information from uploaded documents automatically.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blue.shade700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-  }) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: _primaryBlue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, color: _primaryBlue, size: 20),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey.shade800,
-                ),
-              ),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _textGray,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFileUploadCard({
-    required String label,
-    required String? fileName,
-    required VoidCallback onTap,
-    required IconData icon,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          border: Border.all(color: _borderGray),
-          borderRadius: BorderRadius.circular(8),
-          color: fileName != null ? Colors.green.shade50 : _lightGray,
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Icon(
-                  icon,
-                  color: fileName != null ? Colors.green.shade600 : _textGray,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    fileName ?? label,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: fileName != null ? Colors.green.shade700 : _textGray,
-                      fontWeight: fileName != null ? FontWeight.w500 : FontWeight.normal,
-                    ),
-                  ),
-                ),
-                if (fileName != null) Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
-              ],
-            ),
-            if (fileName == null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'No file chosen',
-                style: TextStyle(fontSize: 12, color: _textGray),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTextInput({
-    required TextEditingController controller,
-    required String label,
-    required String hint,
-    required IconData prefixIcon,
-  }) {
-    return TextFormField(
-      controller: controller,
-      style: const TextStyle(fontSize: 14),
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        prefixIcon: Icon(prefixIcon, size: 18),
-        filled: true,
-        fillColor: Colors.grey.shade50,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: _borderGray),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: _borderGray),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: _primaryBlue, width: 2),
-        ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      ),
-    );
-  }
-
-  Future<void> _handleVerification() async {
-    // Basic validation
-    if (_dlController.text.isEmpty && _dlImageName == null) {
-      _showErrorSnackBar('Please provide driving license information');
-      return;
-    }
-
-    if (_rcController.text.isEmpty && _rcImageName == null) {
-      _showErrorSnackBar('Please provide vehicle registration information');
-      return;
-    }
-
-    setState(() {
-      _isVerifying = true;
-    });
-
-    // Simulate API call delay
-    await Future.delayed(const Duration(seconds: 2));
-
-    setState(() {
-      _isVerifying = false;
-    });
-
-    // TODO: Implement actual API calls to your AI models
-    _showInfoSnackBar('Verification completed! (API integration pending)');
-  }
-
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-    );
-  }
-
-  void _showInfoSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green.shade600,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-    );
-  }
-
-  // Pages used by the scaffold body
   List<Widget> get _pages => [
-    _buildHomeContent(),
+    const HomePageContent(),
     const UserManagementPage(),
     const VehicleLogsPage(),
     const AlertLogsPage(),
@@ -583,7 +73,6 @@ class _HomePageState extends State<HomePage> {
     const SettingsPage(),
   ];
 
-  // Navigation and menu methods
   void _onSelect(BuildContext context, int index, String label) {
     setState(() {
       _selectedIndex = index;
@@ -662,15 +151,12 @@ class _HomePageState extends State<HomePage> {
 
     if (selected != null) {
       if (selected == 'settings') {
-        // Select the same Settings page as the drawer (index 5) — no extra navigation
         setState(() {
           _selectedIndex = 5;
         });
       } else if (selected == 'profile') {
-        // Profile opens as a separate screen
         Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfilePage()));
       } else if (selected == 'logout') {
-        //Navigator.push(context, MaterialPageRoute(builder: (context) => const AuthPage()));
         _logout();
       }
     }
@@ -701,7 +187,6 @@ class _HomePageState extends State<HomePage> {
             ],
             elevation: 2,
           ),
-          // Use the extracted AppDrawer widget
           drawer: AppDrawer(
             userName: widget.userName,
             userEmail: widget.userEmail,

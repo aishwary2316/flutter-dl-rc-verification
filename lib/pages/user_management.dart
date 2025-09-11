@@ -6,12 +6,12 @@ class UserManagementPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const Color _primaryBlue = Color(0xFF1E3A8A);
-    const Color _textGray = Color(0xFF64748B);
-    const Color _lightGray = Color(0xFFF8FAFC);
+    const Color primaryBlue = Color(0xFF1E3A8A);
+    const Color textGray = Color(0xFF64748B);
+    const Color lightGray = Color(0xFFF8FAFC);
 
     return Container(
-      color: _lightGray,
+      color: lightGray,
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -27,14 +27,14 @@ class UserManagementPage extends StatelessWidget {
               ),
               child: Column(
                 children: const [
-                  Icon(Icons.group, size: 64, color: _primaryBlue),
+                  Icon(Icons.group, size: 64, color: primaryBlue),
                   SizedBox(height: 16),
                   Text(
                     'User Management',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: _primaryBlue),
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: primaryBlue),
                   ),
                   SizedBox(height: 8),
-                  Text('This page is under development', style: TextStyle(fontSize: 14, color: _textGray)),
+                  Text('This page is under development', style: TextStyle(fontSize: 14, color: textGray)),
                 ],
               ),
             ),
