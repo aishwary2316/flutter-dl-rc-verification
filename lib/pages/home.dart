@@ -1,43 +1,19 @@
-// lib/pages/home_page.dart
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 import 'auth.dart';
-import 'drawer.dart';
-import 'user_management.dart';
-import 'vehicle_logs.dart';
-import 'alert_logs.dart';
-import 'blacklist_management.dart';
-import 'settings.dart';
-import 'profile.dart';
 
 class HomePage extends StatefulWidget {
-  final String userName;
-  final String userEmail;
-  final String role;
-  final bool isActive;
-  final DateTime loginTime;
-
-  const HomePage({
-    super.key,
-    required this.userName,
-    required this.userEmail,
-    required this.role,
-    required this.isActive,
-    required this.loginTime,
-
-  });
-
-
+  const HomePage({super.key});
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-
 class _HomePageState extends State<HomePage> {
+  // Example user data
+  final String userName = 'Aishwary Raj';
+  final String userEmail = 'aishwary2316@gmail.com';
+
   // Drawer colors (unchanged as requested)
   static const Color _drawerBlue = Color(0xFF162170);
   static const Color _drawerTopBand = Color(0xFF1A2A83);
@@ -51,7 +27,7 @@ class _HomePageState extends State<HomePage> {
   static const Color _textGray = Color(0xFF64748B);
 
   final double _menuWidth = 220;
-  late bool _isActive;
+  final bool _isActive = true;
   int _selectedIndex = 0;
 
   // Controllers & state for the Home UI
@@ -68,8 +44,6 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _isActive = widget.isActive;
-
   }
 
   @override
@@ -77,30 +51,6 @@ class _HomePageState extends State<HomePage> {
     _dlController.dispose();
     _rcController.dispose();
     super.dispose();
-  }
-
-  Future<void> _logout() async {
-    // Clear any in-memory API session if you have one
-    // await api.localLogout(); // uncomment if using ApiService
-
-    // Clear SharedPreferences (user metadata)
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('userName');
-    await prefs.remove('userEmail');
-    await prefs.remove('role');
-    await prefs.remove('isActive');
-    await prefs.remove('loginTime');
-
-    // Clear JWT/token from secure storage
-    final secureStorage = const FlutterSecureStorage();
-    await secureStorage.delete(key: 'auth_token');
-
-    // Navigate to login screen and remove all previous routes
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const AuthPage()),
-          (route) => false,
-    );
   }
 
   // File picker methods (unchanged core logic)
@@ -156,50 +106,50 @@ class _HomePageState extends State<HomePage> {
               child: Column(
                 children: [
                   // Government logo and ministry name
-                  // Row(
-                  //   children: [
-                  //     Container(
-                  //       padding: const EdgeInsets.all(8),
-                  //       decoration: BoxDecoration(
-                  //         color: Colors.grey.shade100,
-                  //         borderRadius: BorderRadius.circular(8),
-                  //       ),
-                  //       child: Icon(
-                  //         Icons.account_balance,
-                  //         size: 40,
-                  //         color: _primaryBlue,
-                  //       ),
-                  //     ),
-                  //     const SizedBox(width: 16),
-                  //     Expanded(
-                  //       child: Column(
-                  //         crossAxisAlignment: CrossAxisAlignment.start,
-                  //         children: [
-                  //           Text(
-                  //             'GOVERNMENT OF INDIA',
-                  //             style: TextStyle(
-                  //               fontSize: 12,
-                  //               fontWeight: FontWeight.w500,
-                  //               color: _textGray,
-                  //               letterSpacing: 0.5,
-                  //             ),
-                  //           ),
-                  //           const SizedBox(height: 4),
-                  //           Text(
-                  //             'MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
-                  //             style: TextStyle(
-                  //               fontSize: 16,
-                  //               fontWeight: FontWeight.bold,
-                  //               color: _primaryBlue,
-                  //               letterSpacing: 0.3,
-                  //             ),
-                  //           ),
-                  //         ],
-                  //       ),
-                  //     ),
-                  //   ],
-                  // ),
-                  // const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.account_balance,
+                          size: 40,
+                          color: _primaryBlue,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'GOVERNMENT OF INDIA',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: _textGray,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: _primaryBlue,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
                   // Main title
                   Text(
                     'Driving License and Vehicle Registration Certificate Verification Portal',
@@ -211,20 +161,6 @@ class _HomePageState extends State<HomePage> {
                       height: 1.3,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  // show logged-in user summary line
-                  // Row(
-                  //   mainAxisAlignment: MainAxisAlignment.center,
-                  //   children: [
-                  //     Text('Signed in as ${widget.userName} (${widget.userEmail})',
-                  //         style: TextStyle(fontSize: 12, color: _textGray)),
-                  //     const SizedBox(width: 12),
-                  //     if (_isActive)
-                  //       Chip(label: const Text('Active'), backgroundColor: Colors.green.shade50)
-                  //     else
-                  //       Chip(label: const Text('Inactive'), backgroundColor: Colors.grey.shade200),
-                  //   ],
-                  // ),
                 ],
               ),
             ),
@@ -476,7 +412,8 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ),
-                if (fileName != null) Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
+                if (fileName != null)
+                  Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
               ],
             ),
             if (fileName == null) ...[
@@ -573,17 +510,66 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Pages used by the scaffold body
+  // Other page contents (unchanged)
   List<Widget> get _pages => [
     _buildHomeContent(),
-    const UserManagementPage(),
-    const VehicleLogsPage(),
-    const AlertLogsPage(),
-    const BlacklistManagementPage(),
-    const SettingsPage(),
+    _buildPlaceholderPage('User Management', Icons.group),
+    _buildPlaceholderPage('Vehicle Logs', Icons.directions_car),
+    _buildPlaceholderPage('Alert Logs', Icons.warning_amber_rounded),
+    _buildPlaceholderPage('Blacklist Management', Icons.do_not_disturb_on),
+    _buildPlaceholderPage('Settings', Icons.settings),
   ];
 
-  // Navigation and menu methods
+  Widget _buildPlaceholderPage(String title, IconData icon) {
+    return Container(
+      color: _lightGray,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Icon(icon, size: 64, color: _primaryBlue),
+                  const SizedBox(height: 16),
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: _primaryBlue,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'This page is under development',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: _textGray,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Navigation and menu methods (unchanged as requested)
   void _onSelect(BuildContext context, int index, String label) {
     setState(() {
       _selectedIndex = index;
@@ -662,16 +648,12 @@ class _HomePageState extends State<HomePage> {
 
     if (selected != null) {
       if (selected == 'settings') {
-        // Select the same Settings page as the drawer (index 5) — no extra navigation
-        setState(() {
-          _selectedIndex = 5;
-        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Settings clicked')));
       } else if (selected == 'profile') {
-        // Profile opens as a separate screen
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfilePage()));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile clicked')));
       } else if (selected == 'logout') {
-        //Navigator.push(context, MaterialPageRoute(builder: (context) => const AuthPage()));
-        _logout();
+        //ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logout clicked')));
+        Navigator.push(context, MaterialPageRoute(builder: (context) => const AuthPage()),);
       }
     }
   }
@@ -701,16 +683,157 @@ class _HomePageState extends State<HomePage> {
             ],
             elevation: 2,
           ),
-          // Use the extracted AppDrawer widget
-          drawer: AppDrawer(
-            userName: widget.userName,
-            userEmail: widget.userEmail,
-            selectedIndex: _selectedIndex,
-            isActive: _isActive,
-            onSelect: _onSelect,
+          drawer: Drawer(
+            child: Container(
+              color: _drawerBlue,
+              child: Column(
+                children: [
+                  Container(height: 24, color: _drawerTopBand),
+                  Container(
+                    color: _drawerBlue,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                    child: Stack(
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                CircleAvatar(
+                                  radius: 30,
+                                  backgroundColor: Colors.white,
+                                  child: Icon(Icons.person, size: 34, color: _drawerTopBand),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  userName,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  userEmail,
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.85),
+                                    fontSize: 12,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                            const Expanded(child: SizedBox()),
+                          ],
+                        ),
+                        Positioned(
+                          top: 6,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _drawerTopBand.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: _isActive ? Colors.greenAccent : Colors.redAccent,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: (_isActive ? Colors.greenAccent : Colors.redAccent).withOpacity(0.6),
+                                        blurRadius: 6,
+                                        spreadRadius: 1,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _isActive ? 'Active' : 'Inactive',
+                                  style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 12, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 20, color: Colors.white24, indent: 16, endIndent: 16),
+                  Expanded(
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        _buildDrawerTile(context, icon: Icons.home, title: 'Home', selected: _selectedIndex == 0, onTap: () => _onSelect(context, 0, 'Home')),
+                        _buildDrawerTile(context, icon: Icons.group, title: 'User Management', selected: _selectedIndex == 1, onTap: () => _onSelect(context, 1, 'User Management')),
+                        _buildDrawerTile(context, icon: Icons.directions_car, title: 'Vehicle Logs', selected: _selectedIndex == 2, onTap: () => _onSelect(context, 2, 'Vehicle Logs')),
+                        _buildDrawerTile(context, icon: Icons.warning_amber_rounded, title: 'Alert Logs', selected: _selectedIndex == 3, onTap: () => _onSelect(context, 3, 'Alert Logs')),
+                        _buildDrawerTile(context, icon: Icons.do_not_disturb_on, title: 'Blacklist Management', selected: _selectedIndex == 4, onTap: () => _onSelect(context, 4, 'Blacklist Management')),
+                        const Divider(height: 20, color: Colors.white24, indent: 16, endIndent: 16),
+                        _buildDrawerTile(context, icon: Icons.settings, title: 'Settings', selected: _selectedIndex == 5, onTap: () => _onSelect(context, 5, 'Settings')),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          height: 56,
+                          width: double.infinity,
+                          child: Image.asset(
+                            'assets/namedLogo.png',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Version 1.0.0',
+                          style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
           body: _pages[_selectedIndex],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDrawerTile(
+      BuildContext context, {
+        required IconData icon,
+        required String title,
+        bool selected = false,
+        required VoidCallback onTap,
+      }) {
+    return Container(
+      color: selected ? _selectedBand : Colors.transparent,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        leading: Icon(icon, color: Colors.white, size: 22),
+        title: Text(
+          title,
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+          maxLines: 2,
+          softWrap: true,
+        ),
+        onTap: onTap,
       ),
     );
   }

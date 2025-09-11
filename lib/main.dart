@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ai_tollgate_survaillance_system/pages/home_page.dart';
+import 'package:ai_tollgate_survaillance_system/pages/auth.dart';
 
 void main() {
   runApp(const MyApp());
@@ -32,7 +32,7 @@ class MyApp extends StatelessWidget {
         // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
       ),
-      home: HomePage(),
+      home: AuthPage(),
     );
   }
 }

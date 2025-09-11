@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
-import 'home_page.dart';
 
 void main() {
   runApp(const AuthPage());
@@ -64,15 +63,6 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    bool parseBool(dynamic v) {
-      if (v == null) return false;
-      if (v is bool) return v;
-      if (v is num) return v != 0;
-      final s = v.toString().trim().toLowerCase();
-      return s == 'true' || s == '1' || s == 'yes';
-    }
-
-
     try {
       // Call ApiService.login (ApiService has internal prints if instrumented)
       print('auth.dart -> attempting login for: $email');
@@ -84,48 +74,15 @@ class _LoginPageState extends State<LoginPage> {
 
         // Save non-sensitive user metadata in SharedPreferences
         final prefs = await SharedPreferences.getInstance();
-        final String name = data['name'] ?? data['username'] ?? '';
-        final String userId = data['userId']?.toString() ?? data['id']?.toString() ?? '';
-        final String userEmail = data['email'] ?? email;
-        final String role = data['role'] ?? '';
-        //final bool isActive = (data['isActive'] == true) || (data['isActive']?.toString().toLowerCase() == 'true');
-        final dynamic rawActive = data['isActive'];
-        final bool isActive = rawActive == true ||
-            rawActive == 1 ||
-            rawActive?.toString().trim().toLowerCase() == 'true' ||
-            rawActive?.toString().trim() == '1';
-
-        print('\n\n\n isActive = ');
-        print(isActive);
-        print('\n\n\n');
-        print('LOGIN RAW isActive: ${data['isActive']} (type: ${data['isActive']?.runtimeType})');
-        print('\n\n\n');
-
-
-        final String loginTimeIso = DateTime.now().toIso8601String();
-
-        if (userId.isNotEmpty) await prefs.setString('user_id', userId);
-        if (name.isNotEmpty) await prefs.setString('user_name', name);
-        if (userEmail.isNotEmpty) await prefs.setString('user_email', userEmail);
-        if (role.isNotEmpty) await prefs.setString('user_role', role);
-        await prefs.setBool('user_is_active', isActive);
-        await prefs.setString('user_login_time', loginTimeIso);
-
+        if (data['userId'] != null) await prefs.setString('user_id', data['userId'].toString());
+        if (data['name'] != null) await prefs.setString('user_name', data['name']);
+        if (data['role'] != null) await prefs.setString('user_role', data['role']);
 
         // If ApiService saved JWT on login, it's already stored securely.
 
         if (!mounted) return;
-        // Open the provided home_page.dart and pass the user details
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => HomePage(
-              userName: name.isNotEmpty ? name : 'Operator',
-              userEmail: userEmail,
-              role: role,
-              isActive: parseBool(data['isActive']),
-              loginTime: DateTime.parse(loginTimeIso),
-            ),
-          ),
+          MaterialPageRoute(builder: (_) => HomePage(userName: data['name'] ?? 'Operator')),
         );
       } else {
         final msg = result['message'] ?? 'Login failed';
@@ -281,6 +238,123 @@ class _LoginPageState extends State<LoginPage> {
             SizedBox(height: MediaQuery.of(context).size.height * 0.2),
             _buildLoginCard(context),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  final String userName;
+  const HomePage({super.key, required this.userName});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  final ApiService api = ApiService();
+  bool _busy = false;
+
+  Future<void> _logout() async {
+    await api.localLogout();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('user_id');
+    await prefs.remove('user_name');
+    await prefs.remove('user_role');
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+          (route) => false,
+    );
+  }
+
+  Future<void> _pickAndVerify() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? picked = await picker.pickImage(source: ImageSource.camera, imageQuality: 80);
+    if (picked == null) return;
+
+    final file = File(picked.path);
+
+    setState(() {
+      _busy = true;
+    });
+
+    // show loading dialog
+    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+
+    final res = await api.verifyDriver(
+      driverImage: file,
+      dlNumber: '',
+      rcNumber: '',
+      location: '',
+      tollgate: '',
+    );
+
+    Navigator.of(context).pop(); // close loading dialog
+
+    setState(() {
+      _busy = false;
+    });
+
+    if (res['ok'] == true) {
+      final data = res['data'] ?? {};
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Verify Result'),
+          content: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(data))),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+        ),
+      );
+    } else {
+      final msg = res['message'] ?? 'Verification failed';
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String displayName = widget.userName.isNotEmpty ? widget.userName : 'Operator';
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Operator Dashboard'),
+        actions: [
+          IconButton(onPressed: _logout, icon: const Icon(Icons.logout)),
+        ],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Welcome, $displayName', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _busy ? null : _pickAndVerify,
+              child: _busy ? const CircularProgressIndicator() : const Text('Scan Driver (Camera)'),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () async {
+                final logs = await api.getLogs();
+                if (logs['ok'] == true) {
+                  final data = logs['data'];
+                  showDialog(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Recent Logs'),
+                      content: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(data))),
+                      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(logs['message'] ?? 'Failed to fetch logs')));
+                }
+              },
+              child: const Text('Fetch Logs'),
+            ),
+          ]),
         ),
       ),
     );

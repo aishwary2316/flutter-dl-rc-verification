@@ -1,0 +1,5 @@
+home_ui.dart -> should be replaced with home_page.dart
+
+Deletable:
+authentication.dart
+home.dart
