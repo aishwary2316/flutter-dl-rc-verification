@@ -269,7 +269,7 @@ class _LoginPageState extends State<LoginPage> {
                     children: [
                       Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
                       Text('MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.indigo)),
                     ],
                   ),
                 ],

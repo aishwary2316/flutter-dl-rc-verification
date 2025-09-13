@@ -1,16 +1,13 @@
 // lib/pages/home.dart
-
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-
-import 'verification.dart'; // <- uses verifyDriverAndShowDialog()
+import '../services/api_service.dart';
 
 class HomePageContent extends StatefulWidget {
   const HomePageContent({super.key});
@@ -100,6 +97,7 @@ class _HomePageContentState extends State<HomePageContent> {
     }
     return null;
   }
+
 
   Future<void> _uploadForOcrAndFill({
     required String uploadUrl,
@@ -263,8 +261,9 @@ class _HomePageContentState extends State<HomePageContent> {
     }
   }
 
-  // ----------------- Pick handlers (camera/gallery/file) --------------
 
+
+  // ----------------- Pick handlers (camera/gallery/file) --------------
   Future<void> _pickDlImage() async {
     _showImageSourceOptions(
       title: 'Select Driving License',
@@ -499,44 +498,81 @@ class _HomePageContentState extends State<HomePageContent> {
     );
   }
 
-  // ---------------- Verification: delegate to verification.dart ----------
+// ---------- Replace your existing _handleVerification with this ----------
   Future<void> _handleVerification() async {
     final dlNumber = _dlController.text.trim();
     final rcNumber = _rcController.text.trim();
 
-    // Build driverFile (if any)
-    File? driverFile;
-    if (_lastDriverXFile != null && _lastDriverXFile!.path.isNotEmpty) {
-      driverFile = File(_lastDriverXFile!.path);
-    } else if (_lastDriverPFile != null && _lastDriverPFile!.path != null && _lastDriverPFile!.path!.isNotEmpty) {
-      driverFile = File(_lastDriverPFile!.path!);
-    }
-
-    if (dlNumber.isEmpty && rcNumber.isEmpty && driverFile == null) {
+    if (dlNumber.isEmpty && rcNumber.isEmpty && _driverImageName == null) {
       _showErrorSnackBar('Please provide a DL number, a Vehicle number, or a Driver Image to verify.');
       return;
     }
 
-    setState(() => _isVerifying = true);
+    // If verify backend not configured, show a local summary dialog instead of calling backend.
+    if (_verifyBaseUrl.trim().isEmpty) {
+      final summary = {
+        'dl_number': dlNumber,
+        'rc_number': rcNumber,
+        'driverImageProvided': _driverImageName != null,
+        'note': 'Verification endpoint not configured in app (_verifyBaseUrl is empty).'
+      };
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Verification (not sent)'),
+          content: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(summary))),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isVerifying = true;
+    });
 
     try {
-      await verifyDriverAndShowDialog(
-        context,
+      // Prepare driver Image File (if any)
+      File? driverFile;
+      // _lastDriverXFile assumed to be an XFile (image_picker) and _lastDriverPFile a PlatformFile (file_picker)
+      if (_lastDriverXFile != null && _lastDriverXFile!.path.isNotEmpty) {
+        driverFile = File(_lastDriverXFile!.path);
+      } else if (_lastDriverPFile != null && _lastDriverPFile!.path != null && _lastDriverPFile!.path!.isNotEmpty) {
+        driverFile = File(_lastDriverPFile!.path!);
+      }
+
+      // Call ApiService.verifyDriver
+      final api = ApiService();
+      final result = await api.verifyDriver(
         dlNumber: dlNumber.isNotEmpty ? dlNumber : null,
         rcNumber: rcNumber.isNotEmpty ? rcNumber : null,
-        driverImageFile: driverFile,
         location: 'Toll-Plaza-1',
         tollgate: 'Gate-A',
+        driverImage: driverFile,
       );
-    } catch (e) {
-      _showErrorSnackBar('An error occurred during verification: $e');
+
+      if (result['ok'] == true) {
+        final body = result['data'];
+        // body expected to be the server JSON { dlData, rcData, driverData, suspicious }
+        _showVerificationResultDialog(body);
+      } else {
+        // Prefer server message if available
+        final message = result['message'] ??
+            (result['body'] != null ? const JsonEncoder.withIndent('  ').convert(result['body']) : 'Unknown error');
+        _showErrorSnackBar('Verification failed: $message');
+      }
+    } catch (err) {
+      _showErrorSnackBar('An error occurred during verification. Please check the server. Error: $err');
     } finally {
       setState(() {
         _isVerifying = false;
-        // Reset selected names and file references
+        // Reset selected names (like your JS did)
         _dlImageName = null;
         _rcImageName = null;
         _driverImageName = null;
+        // keep extracted text in controllers
         _lastDlXFile = _lastDlPFile = null;
         _lastRcXFile = _lastRcPFile = null;
         _lastDriverXFile = _lastDriverPFile = null;
@@ -544,6 +580,285 @@ class _HomePageContentState extends State<HomePageContent> {
     }
   }
 
+
+// Replace _showVerificationResultDialog with this rich version:
+  void _showVerificationResultDialog(dynamic body) {
+    final Map<String, dynamic> mapBody = (body is Map) ? Map<String, dynamic>.from(body) : {'raw': body};
+
+    final Map<String, dynamic>? dlData = mapBody['dlData'] is Map ? Map<String, dynamic>.from(mapBody['dlData']) : null;
+    final Map<String, dynamic>? rcData = mapBody['rcData'] is Map ? Map<String, dynamic>.from(mapBody['rcData']) : null;
+    final Map<String, dynamic>? driverData = mapBody['driverData'] is Map ? Map<String, dynamic>.from(mapBody['driverData']) : null;
+    final bool suspiciousFlag = mapBody['suspicious'] == true;
+
+    // Determine server-side suspicious reasons (mirror server logic as much as possible)
+    final List<String> suspiciousReasons = [];
+    if (dlData != null) {
+      final dlStatus = (dlData['status'] ?? '').toString().toLowerCase();
+      if (dlStatus == 'blacklisted') suspiciousReasons.add('Driving License is BLACKLISTED');
+      if (dlStatus == 'not_found') suspiciousReasons.add('DL not found in DB');
+    }
+    if (rcData != null) {
+      final rcStatus = (rcData['status'] ?? rcData['verification'] ?? '').toString().toLowerCase();
+      if (rcStatus == 'blacklisted') suspiciousReasons.add('Vehicle / RC is BLACKLISTED');
+      if (rcStatus == 'not_found') suspiciousReasons.add('RC / Vehicle not found in DB');
+    }
+    if (driverData != null) {
+      final drvStatus = (driverData['status'] ?? '').toString().toUpperCase();
+      if (drvStatus == 'ALERT') suspiciousReasons.add('Driver matched a SUSPECT (face recognition ALERT)');
+      if (drvStatus == 'SERVICE_UNAVAILABLE') suspiciousReasons.add('Face recognition service unavailable');
+    }
+    if (suspiciousFlag && suspiciousReasons.isEmpty) {
+      suspiciousReasons.add('System raised a suspicious flag (details in raw JSON)');
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx2, setStateDialog) {
+          return AlertDialog(
+            title: Row(
+              children: [
+                const Expanded(child: Text('Verification Result', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600))),
+                if (suspiciousFlag)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(6)),
+                    child: const Text('SUSPICIOUS', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // --- Suspicious reasons summary ---
+                if (suspiciousReasons.isNotEmpty) ...[
+                  const Text('Alerts / Reasons', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  for (final r in suspiciousReasons)
+                    Row(children: [
+                      const Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(r, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    ]),
+                  const Divider(),
+                ],
+
+                // --- DL Data ---
+                const Text('Driving License (DL)', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                if (dlData == null)
+                  const Text('No DL data returned.')
+                else
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _twoColumn('Status', dlData['status'] ?? 'N/A'),
+                    _twoColumn('License No', dlData['licenseNumber'] ?? dlData['dl_number'] ?? 'N/A'),
+                    _twoColumn('Name', dlData['name'] ?? 'N/A'),
+                    _twoColumn('Validity', dlData['validity'] ?? 'N/A'),
+                    _twoColumn('Phone', dlData['phone_number'] ?? 'N/A'),
+                    // show any extra keys present in DL object that server might include
+                    _optionalKeyList(dlData, ['other', 'extra']),
+                  ]),
+                const SizedBox(height: 12),
+                const Divider(),
+
+                // --- RC Data ---
+                const Text('Vehicle / RC', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                if (rcData == null)
+                  const Text('No RC data returned.')
+                else
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    // server sometimes returns status under 'status' or 'verification'
+                    _twoColumn('Status', rcData['status'] ?? rcData['verification'] ?? 'N/A'),
+                    _twoColumn('Regn No', rcData['regn_number'] ?? rcData['regn_number'] ?? 'N/A'),
+                    _twoColumn('Owner', rcData['owner_name'] ?? 'N/A'),
+                    _twoColumn('Maker Class', rcData['maker_class'] ?? 'N/A'),
+                    _twoColumn('Vehicle Class', rcData['vehicle_class'] ?? 'N/A'),
+                    _twoColumn('Wheel Type', rcData['wheel_type'] ?? 'N/A'),
+                    _twoColumn('Engine No', rcData['engine_number'] ?? 'N/A'),
+                    _twoColumn('Chassis No', rcData['chassis_number'] ?? 'N/A'),
+                    if (rcData['crime_involved'] != null) _twoColumn('Crime Involved', rcData['crime_involved']),
+                    _optionalKeyList(rcData, ['other', 'extra']),
+                  ]),
+                const SizedBox(height: 12),
+                const Divider(),
+
+                // --- Driver / Face Data ---
+                const Text('Driver / Face Recognition', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                if (driverData == null)
+                  const Text('No driver image / face data returned.')
+                else
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    _twoColumn('Status', driverData['status'] ?? 'N/A'),
+                    if (driverData['name'] != null) _twoColumn('Name', driverData['name']),
+                    if (driverData['message'] != null) _twoColumn('Message', driverData['message']),
+                    _optionalKeyList(driverData, ['confidence', 'score', 'meta']),
+                  ]),
+
+                const SizedBox(height: 12),
+                const Divider(),
+
+                // Raw JSON viewer
+                const Text('Raw JSON Response', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(6)),
+                  child: SelectableText(const JsonEncoder.withIndent('  ').convert(mapBody)),
+                ),
+
+                const SizedBox(height: 12),
+
+                // DL usage button (calls API to fetch recent usage logs for this DL)
+                if (dlData != null && (dlData['licenseNumber'] ?? dlData['dl_number']) != null)
+                  Row(
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.list_alt),
+                        label: const Text('View DL usage (2 days)'),
+                        onPressed: () async {
+                          final dlNum = (dlData['licenseNumber'] ?? dlData['dl_number']).toString();
+                          // Show a small loading dialog while fetching
+                          showDialog(
+                            context: ctx2,
+                            barrierDismissible: false,
+                            builder: (loadingCtx) => const AlertDialog(
+                              content: SizedBox(height: 60, child: Center(child: CircularProgressIndicator())),
+                            ),
+                          );
+                          final api = ApiService();
+                          final usage = await api.getDLUsage(dlNum);
+                          Navigator.of(ctx2).pop(); // close loading
+                          if (usage['ok'] == true) {
+                            final data = usage['data'] ?? [];
+                            _showDLUsageDialog(dlNum, data);
+                          } else {
+                            final msg = usage['message'] ?? 'Failed to fetch DL usage';
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      if (suspiciousReasons.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            // Copy reasons to clipboard or show a focused dialog
+                            showDialog(
+                              context: ctx2,
+                              builder: (dctx) => AlertDialog(
+                                title: const Text('Suspicious Reasons'),
+                                content: SingleChildScrollView(child: Text(suspiciousReasons.join('\n'))),
+                                actions: [TextButton(onPressed: () => Navigator.of(dctx).pop(), child: const Text('Close'))],
+                              ),
+                            );
+                          },
+                          child: const Text('View Suspicious Reasons'),
+                        )
+                    ],
+                  ),
+              ]),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+// Helper widget for two-column label/value
+  Widget _twoColumn(String label, dynamic value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 120, child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text(value == null ? 'N/A' : value.toString())),
+        ],
+      ),
+    );
+  }
+
+// Helper to optionally show other keys (defensive)
+  Widget _optionalKeyList(Map<String, dynamic> map, List<String> ignoreKeys) {
+    // Show any keys not in ignoreKeys and not already displayed; keep limited to avoid huge output
+    final displayed = <String>{
+      'status',
+      'licenseNumber',
+      'dl_number',
+      'name',
+      'validity',
+      'phone_number',
+      'regn_number',
+      'owner_name',
+      'maker_class',
+      'vehicle_class',
+      'wheel_type',
+      'engine_number',
+      'chassis_number',
+      'crime_involved',
+      'verification',
+      'message',
+    };
+    final extras = <String>[];
+    for (final k in map.keys) {
+      if (!displayed.contains(k) && !ignoreKeys.contains(k)) extras.add(k);
+    }
+    if (extras.isEmpty) return const SizedBox.shrink();
+    // limit to first 8 extras
+    final limited = extras.take(8);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        const Text('Other fields:', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        for (final k in limited) _twoColumn(k, map[k]),
+        if (extras.length > 8) Text('+ ${extras.length - 8} more fields'),
+      ],
+    );
+  }
+
+// Show DL usage dialog (list of recent logs)
+  void _showDLUsageDialog(String dlNumber, dynamic logs) {
+    final List logsList = (logs is List) ? logs : [];
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text('DL Usage: $dlNumber (last 2 days)'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: logsList.isEmpty
+                ? const Text('No recent usage logs found for this DL in last 2 days.')
+                : ListView.separated(
+              shrinkWrap: true,
+              itemBuilder: (c, i) {
+                final item = logsList[i] is Map ? Map<String, dynamic>.from(logsList[i]) : {'raw': logsList[i]};
+                final ts = item['timestamp'] ?? item['time'] ?? '';
+                return ListTile(
+                  title: Text(item['vehicle_number'] ?? item['vehicle'] ?? 'Vehicle: N/A'),
+                  subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (item['dl_number'] != null) Text('DL: ${item['dl_number']}'),
+                    if (item['alert_type'] != null) Text('Alert: ${item['alert_type']}'),
+                    if (item['description'] != null) Text('Desc: ${item['description']}'),
+                    if (ts != null) Text('Time: ${ts.toString()}'),
+                  ]),
+                );
+              },
+              separatorBuilder: (_, __) => const Divider(),
+              itemCount: logsList.length,
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+          ],
+        );
+      },
+    );
+  }
   // ----------------- Snackbars ----------------------------------------
   void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
