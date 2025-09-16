@@ -175,22 +175,26 @@ class AppDrawer extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SizedBox(
                     height: 56,
                     width: double.infinity,
-                    child: Image.asset(
-                      'assets/namedLogo.png',
-                      fit: BoxFit.contain,
+                    child: Align(
+                      alignment: Alignment.center,
+                      child: Image.asset(
+                        'assets/MoRTH.png',
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Text(
+                  Align(alignment: Alignment.center,child: Text(
                     'Version 1.0.0',
                     style: TextStyle(color: Colors.white.withOpacity(0.75), fontSize: 12),
+                  ),
                   ),
                 ],
               ),
