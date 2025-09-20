@@ -64,12 +64,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  List<Widget> get _pages => [
+  // The pages are now defined as a final list, and the role is passed to the relevant widgets
+  late final List<Widget> _pages = [
     const HomePageContent(),
-    const UserManagementPage(),
+    UserManagementPage(role: widget.role),
     const VehicleLogsPage(),
     const AlertLogsPage(),
-    const BlacklistManagementPage(),
+    BlacklistManagementPage(role: widget.role),
     const SettingsPage(),
   ];
 
@@ -165,6 +166,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
@@ -190,6 +192,7 @@ class _HomePageState extends State<HomePage> {
           drawer: AppDrawer(
             userName: widget.userName,
             userEmail: widget.userEmail,
+            role: widget.role,
             selectedIndex: _selectedIndex,
             isActive: _isActive,
             onSelect: _onSelect,

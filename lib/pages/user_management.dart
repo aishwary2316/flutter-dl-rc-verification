@@ -12,7 +12,8 @@ import 'package:animate_do/animate_do.dart'; // Import for animations
 ///
 /// If PUT doesn't exist on server, the UI offers to delete+recreate the user with the new role.
 class UserManagementPage extends StatefulWidget {
-  const UserManagementPage({super.key});
+  final String role;
+  const UserManagementPage({super.key, required this.role});
 
   @override
   State<UserManagementPage> createState() => _UserManagementPageState();
@@ -34,6 +35,9 @@ class _UserManagementPageState extends State<UserManagementPage> {
   final TextEditingController _addEmail = TextEditingController();
   final TextEditingController _addPassword = TextEditingController();
   String _addRole = 'enduser'; // default role
+
+  // NEW: prevent double submissions
+  bool _isAdding = false;
 
   @override
   void initState() {
@@ -70,19 +74,25 @@ class _UserManagementPageState extends State<UserManagementPage> {
         } else if (body is Map) {
           items = [Map<String, dynamic>.from(body)];
         }
-        setState(() {
-          _users = items;
-          _filterUsers(_searchController.text);
-        });
+        if (mounted) {
+          setState(() {
+            _users = items;
+            _filterUsers(_searchController.text);
+          });
+        }
       } else {
-        setState(() {
-          _error = 'Failed to load users: ${res.statusCode}';
-        });
+        if (mounted) {
+          setState(() {
+            _error = 'Failed to load users: ${res.statusCode}';
+          });
+        }
       }
     } catch (e) {
-      setState(() {
-        _error = 'Error fetching users: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Error fetching users: $e';
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -90,21 +100,25 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
   void _filterUsers(String query) {
     if (query.trim().isEmpty) {
-      setState(() {
-        _filteredUsers = List.from(_users);
-      });
+      if (mounted) {
+        setState(() {
+          _filteredUsers = List.from(_users);
+        });
+      }
       return;
     }
 
     final lowerCaseQuery = query.trim().toLowerCase();
-    setState(() {
-      _filteredUsers = _users.where((u) {
-        final name = (u['name'] ?? '').toString().toLowerCase();
-        final email = (u['email'] ?? '').toString().toLowerCase();
-        final role = (u['role'] ?? '').toString().toLowerCase();
-        return name.contains(lowerCaseQuery) || email.contains(lowerCaseQuery) || role.contains(lowerCaseQuery);
-      }).toList();
-    });
+    if (mounted) {
+      setState(() {
+        _filteredUsers = _users.where((u) {
+          final name = (u['name'] ?? '').toString().toLowerCase();
+          final email = (u['email'] ?? '').toString().toLowerCase();
+          final role = (u['role'] ?? '').toString().toLowerCase();
+          return name.contains(lowerCaseQuery) || email.contains(lowerCaseQuery) || role.contains(lowerCaseQuery);
+        }).toList();
+      });
+    }
   }
 
   String _idOf(dynamic raw) {
@@ -116,8 +130,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
     return raw.toString();
   }
 
-  Future<void> _addUser() async {
+  // NOTE: Now accepts dialogContext so we explicitly pop the dialog route.
+  Future<void> _addUser(BuildContext dialogContext) async {
+    if (_isAdding) return; // guard
     if (!_addFormKey.currentState!.validate()) return;
+
+    setState(() => _isAdding = true);
+
     final payload = {
       'name': _addName.text.trim(),
       'email': _addEmail.text.trim(),
@@ -128,14 +147,14 @@ class _UserManagementPageState extends State<UserManagementPage> {
     final uri = Uri.parse('$BASE_URL/api/users');
     try {
       final res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: json.encode(payload)).timeout(const Duration(seconds: 15));
-      if (res.statusCode == 201 || res.statusCode == 200) {
-        if (mounted) {
+      if (mounted) {
+        if (res.statusCode == 201 || res.statusCode == 200) {
+          // Important: pop the dialog using the dialog's context so we don't accidentally pop other routes.
+          Navigator.of(dialogContext).pop();
+          // Show snackbar using the page's context (this).
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User added')));
-          Navigator.of(context).pop();
           _fetchUsers();
-        }
-      } else {
-        if (mounted) {
+        } else {
           final body = res.body.isNotEmpty ? res.body : 'status ${res.statusCode}';
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $body')));
         }
@@ -144,6 +163,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add error: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _isAdding = false);
     }
   }
 
@@ -372,7 +393,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
-          ElevatedButton(onPressed: _addUser, child: const Text('Add User')),
+          // IMPORTANT: pass the dialog's ctx to _addUser so it can pop the dialog safely.
+          ElevatedButton(
+            onPressed: _isAdding ? null : () => _addUser(ctx),
+            child: _isAdding
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Add User'),
+          ),
         ],
       ),
     );
@@ -386,7 +413,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
     final email = (u['email'] ?? '').toString();
     final role = (u['role'] ?? 'enduser').toString();
     final isActive = u['isActive'] == true;
-    final loginTime = u['loginTime'] ?? u['login_time'] ?? u['lastLogin'] ?? '';
     final roleIcon = _getRoleIcon(role);
 
     return FadeInUp(
@@ -427,38 +453,39 @@ class _UserManagementPageState extends State<UserManagementPage> {
                     ],
                   ),
                 ),
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert, color: Colors.black54),
-                  onSelected: (v) async {
-                    if (v == 'delete') {
-                      final confirm = await _showConfirmDialog('Delete user $email ?');
-                      if (confirm == true) {
-                        await _deleteUser(id);
+                if (widget.role == 'superadmin')
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, color: Colors.black54),
+                    onSelected: (v) async {
+                      if (v == 'delete') {
+                        final confirm = await _showConfirmDialog('Delete user $email ?');
+                        if (confirm == true) {
+                          await _deleteUser(id);
+                        }
+                      } else if (v == 'change_role') {
+                        final newRole = await showDialog<String>(
+                          context: context,
+                          builder: (ctx) => SimpleDialog(
+                            title: const Text('Select Role'),
+                            children: [
+                              SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('superadmin'), child: const Text('Super Admin')),
+                              SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('admin'), child: const Text('Admin')),
+                              SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('enduser'), child: const Text('End User')),
+                            ],
+                          ),
+                        );
+                        if (newRole != null && newRole != role) {
+                          await _changeRole(id, newRole, u);
+                        }
+                      } else if (v == 'view_raw') {
+                        _showRawJson(u);
                       }
-                    } else if (v == 'change_role') {
-                      final newRole = await showDialog<String>(
-                        context: context,
-                        builder: (ctx) => SimpleDialog(
-                          title: const Text('Select Role'),
-                          children: [
-                            SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('superadmin'), child: const Text('Super Admin')),
-                            SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('admin'), child: const Text('Admin')),
-                            SimpleDialogOption(onPressed: () => Navigator.of(ctx).pop('enduser'), child: const Text('End User')),
-                          ],
-                        ),
-                      );
-                      if (newRole != null && newRole != role) {
-                        await _changeRole(id, newRole, u);
-                      }
-                    } else if (v == 'view_raw') {
-                      _showRawJson(u);
-                    }
-                  },
-                  itemBuilder: (ctx) => [
-                    const PopupMenuItem(value: 'change_role', child: Text('Change Role')),
-                    const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
-                  ],
-                )
+                    },
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(value: 'change_role', child: Text('Change Role')),
+                      const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.red))),
+                    ],
+                  )
               ],
             ),
           ),
@@ -565,6 +592,12 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.role != 'superadmin') {
+      return const Center(
+        child: Text('Access Denied', style: TextStyle(fontSize: 24, color: Colors.red)),
+      );
+    }
+
     const Color primaryBlue = Color(0xFF1E3A8A);
 
     return Scaffold(

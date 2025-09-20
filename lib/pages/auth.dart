@@ -17,6 +17,7 @@ class AuthPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Operator Login',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.indigo,
         visualDensity: VisualDensity.adaptivePlatformDensity,
