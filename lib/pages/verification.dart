@@ -78,12 +78,13 @@ Future<void> showVerificationDialog(
   String? errorMessage;
 
   try {
+    // Call the main OnRender backend for DL and RC verification
     final result = await api.verifyDriver(
       dlNumber: dlNumber != null && dlNumber.trim().isNotEmpty ? dlNumber.trim() : null,
       rcNumber: rcNumber != null && rcNumber.trim().isNotEmpty ? rcNumber.trim() : null,
       location: location,
       tollgate: tollgate,
-      driverImage: driverImage,
+      driverImage: null, // Do not send image to this backend
     );
 
     if (result['ok'] == true) {
@@ -109,10 +110,38 @@ Future<void> showVerificationDialog(
     }
   } catch (e) {
     errorMessage = 'An error occurred during verification: $e';
-  } finally {
-    // Dismiss loading
-    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
+
+  // Perform face recognition separately if a driver image is provided
+  if (driverImage != null) {
+    try {
+      final faceResult = await api.recognizeFace(driverImage.path);
+      if (faceResult['ok'] == true) {
+        // Merge face recognition data into the main bodyMap
+        bodyMap['driverData'] = {
+          'status': faceResult['data']['status'],
+          'message': faceResult['data']['message'],
+          'name': faceResult['data']['name'] ?? 'N/A',
+        };
+      } else {
+        // Set an error status for face recognition
+        bodyMap['driverData'] = {
+          'status': 'SERVICE_UNAVAILABLE',
+          'message': faceResult['message'] ?? 'Face recognition failed.',
+        };
+      }
+    } catch (e) {
+      // Set an error status if the face recognition call fails
+      bodyMap['driverData'] = {
+        'status': 'SERVICE_UNAVAILABLE',
+        'message': 'Face recognition network error: $e',
+      };
+    }
+  }
+
+  // Dismiss loading
+  if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+
 
   if (errorMessage != null) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errorMessage)));

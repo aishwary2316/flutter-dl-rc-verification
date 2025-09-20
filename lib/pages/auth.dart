@@ -186,7 +186,7 @@ class _LoginPageState extends State<LoginPage> {
                   keyboardType: TextInputType.emailAddress,
                   decoration: InputDecoration(
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    hintText: 'akshaya@toll.com',
+                    hintText: 'someone@example.com',
                     contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
                   ),
                 ),
@@ -200,7 +200,7 @@ class _LoginPageState extends State<LoginPage> {
                   obscureText: !_showPassword,
                   decoration: InputDecoration(
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    hintText: 'operator123',
+                    hintText: 'Shhhh...',
                     contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
                   ),
                 ),
