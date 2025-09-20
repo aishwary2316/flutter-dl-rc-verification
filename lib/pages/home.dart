@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -25,11 +26,12 @@ class _HomePageContentState extends State<HomePageContent> {
   final String _verifyBaseUrl = '';
 
   // OCR model endpoints (use the exact working paths)
-  final String _dlOcrUrl = 'https://dl-extractor-api-209690283535.us-central1.run.app/extract-dl';
+  //final String _dlOcrUrl = 'https://dl-extractor-api-209690283535.us-central1.run.app/extract-dl';
+  final String _dlOcrUrl = 'https://dl-extractor-service-777302308889.us-central1.run.app';
   final String _rcOcrUrl = 'https://my-ml-api-995937866035.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
-  final String _dlOcrFieldName = 'dl_image'; // as used in your curl
+  final String _dlOcrFieldName = 'image_file'; // Changed to match new API
   final String _rcOcrFieldName = 'file';
   // ================================================
 
@@ -71,6 +73,15 @@ class _HomePageContentState extends State<HomePageContent> {
     super.dispose();
   }
 
+  // Helper to know if we can enable the Verify button
+  bool get _hasInput {
+    if (_dlController.text.trim().isNotEmpty) return true;
+    if (_rcController.text.trim().isNotEmpty) return true;
+    if (_lastDriverXFile != null) return true;
+    if (_lastDriverPFile != null) return true;
+    return false;
+  }
+
   // ----------------- Helpers: create MultipartFile ---------------------
   Future<http.MultipartFile?> _makeMultipartFromPicked({
     required String fieldName,
@@ -96,7 +107,7 @@ class _HomePageContentState extends State<HomePageContent> {
         return http.MultipartFile.fromBytes(fieldName, bytes, filename: xfile.name);
       }
     } catch (e) {
-      // ignore and return null
+      debugPrint('[_makeMultipartFromPicked] error: $e');
     }
     return null;
   }
@@ -123,15 +134,15 @@ class _HomePageContentState extends State<HomePageContent> {
         effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/recognize_plate/';
         debugPrint('Adjusted RC URL to: $effectiveUrl');
       }
-      if (effectiveUrl.contains('dl-extractor-api-209690283535.us-central1.run.app') &&
-          !effectiveUrl.contains('extract-dl')) {
-        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/extract-dl';
+      if (effectiveUrl.contains('dl-extractor-service-777302308889.us-central1.run.app') &&
+          !effectiveUrl.contains('extract/')) { // Updated path
+        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/extract/'; // Updated path
         debugPrint('Adjusted DL URL to: $effectiveUrl');
       }
 
-      // Choose field candidates: for DL prefer dl_image, for RC prefer file
+      // Choose field candidates: for DL prefer image_file, for RC prefer file
       final List<String> fieldCandidates = isDlModel
-          ? [primaryFieldName, 'dl_image', 'image', 'file']
+          ? [primaryFieldName, 'image_file', 'dl_image', 'image', 'file'] // Updated to prioritize 'image_file'
           : [primaryFieldName, 'file'];
 
       final Uri uri = Uri.parse(effectiveUrl);
@@ -504,12 +515,23 @@ class _HomePageContentState extends State<HomePageContent> {
     final dlNumber = _dlController.text.trim();
     final rcNumber = _rcController.text.trim();
 
-    // Build driverFile (if any)
+    // Build driverFile (if any) - only on non-web platforms we can build a dart:io File
     File? driverFile;
-    if (_lastDriverXFile != null && _lastDriverXFile!.path.isNotEmpty) {
-      driverFile = File(_lastDriverXFile!.path);
-    } else if (_lastDriverPFile != null && _lastDriverPFile!.path != null && _lastDriverPFile!.path!.isNotEmpty) {
-      driverFile = File(_lastDriverPFile!.path!);
+    if (!kIsWeb) {
+      if (_lastDriverXFile != null && _lastDriverXFile!.path.isNotEmpty) {
+        driverFile = File(_lastDriverXFile!.path);
+      } else if (_lastDriverPFile != null && _lastDriverPFile!.path != null && _lastDriverPFile!.path!.isNotEmpty) {
+        driverFile = File(_lastDriverPFile!.path!);
+      }
+    } else {
+      // On web: cannot convert picked file into dart:io File.
+      // If only driver image is selected on web, inform user that face verification via file path is not supported.
+      if (dlNumber.isEmpty && rcNumber.isEmpty && (_lastDriverXFile != null || _lastDriverPFile != null)) {
+        _showErrorSnackBar('Face verification from web is currently unsupported. Try from a mobile device or enter DL/RC numbers.');
+        return;
+      }
+      // If DL/RC present, proceed without driverFile (face verification skipped in backend call)
+      driverFile = null;
     }
 
     if (dlNumber.isEmpty && rcNumber.isEmpty && driverFile == null) {
@@ -533,7 +555,7 @@ class _HomePageContentState extends State<HomePageContent> {
     } finally {
       setState(() {
         _isVerifying = false;
-        // Reset selected names and file references
+        // Reset selected names and file references (keep extracted text in controllers so user can edit if desired)
         _dlImageName = null;
         _rcImageName = null;
         _driverImageName = null;
@@ -542,6 +564,86 @@ class _HomePageContentState extends State<HomePageContent> {
         _lastDriverXFile = _lastDriverPFile = null;
       });
     }
+  }
+
+  // ----------------- Driver image helpers for preview -----------------
+
+  /// Load driver image bytes from whichever source is available.
+  Future<Uint8List?> _loadDriverImageBytes() async {
+    try {
+      if (_lastDriverPFile != null) {
+        if (_lastDriverPFile!.bytes != null) return _lastDriverPFile!.bytes;
+        if (_lastDriverPFile!.path != null && _lastDriverPFile!.path!.isNotEmpty) {
+          return await File(_lastDriverPFile!.path!).readAsBytes();
+        }
+      }
+
+      if (_lastDriverXFile != null) {
+        // On native platforms xfile.path is usually available
+        if (!kIsWeb && _lastDriverXFile!.path.isNotEmpty) {
+          return await File(_lastDriverXFile!.path).readAsBytes();
+        }
+        // On web or fallback, read bytes from XFile
+        return await _lastDriverXFile!.readAsBytes();
+      }
+    } catch (e) {
+      debugPrint('[_loadDriverImageBytes] error: $e');
+    }
+    return null;
+  }
+
+  /// Show fullscreen preview of driver image (tappable thumbnail opens this).
+  void _openFullScreenDriverPreview() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return Dialog(
+          insetPadding: const EdgeInsets.all(0),
+          backgroundColor: Colors.black,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: FutureBuilder<Uint8List?>(
+                  future: _loadDriverImageBytes(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator(color: Colors.white));
+                    }
+                    if (!snap.hasData || snap.data == null) {
+                      return const Center(child: Text('Unable to load image', style: TextStyle(color: Colors.white)));
+                    }
+                    return InteractiveViewer(
+                      maxScale: 5.0,
+                      child: Center(
+                        child: Image.memory(
+                          snap.data!,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              // Close button top-right
+              Positioned(
+                top: 28,
+                right: 16,
+                child: SafeArea(
+                  child: CircleAvatar(
+                    backgroundColor: Colors.black45,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // ----------------- Snackbars ----------------------------------------
@@ -630,6 +732,7 @@ class _HomePageContentState extends State<HomePageContent> {
                     fileName: _dlImageName,
                     onTap: _pickDlImage,
                     icon: Icons.upload_file,
+                    isDriver: false,
                   ),
 
                   const SizedBox(height: 12),
@@ -657,6 +760,7 @@ class _HomePageContentState extends State<HomePageContent> {
                     fileName: _rcImageName,
                     onTap: _pickRcImage,
                     icon: Icons.upload_file,
+                    isDriver: false,
                   ),
 
                   const SizedBox(height: 12),
@@ -684,6 +788,7 @@ class _HomePageContentState extends State<HomePageContent> {
                     fileName: _driverImageName,
                     onTap: _pickDriverImage,
                     icon: Icons.person_add_alt_1,
+                    isDriver: true, // <--- show thumbnail + preview behavior
                   ),
 
                   const SizedBox(height: 32),
@@ -693,7 +798,7 @@ class _HomePageContentState extends State<HomePageContent> {
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton(
-                      onPressed: _isVerifying ? null : _handleVerification,
+                      onPressed: _isVerifying || !_hasInput ? null : _handleVerification,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _primaryBlue,
                         foregroundColor: Colors.white,
@@ -809,18 +914,62 @@ class _HomePageContentState extends State<HomePageContent> {
     );
   }
 
+  /// fileName: display label
+  /// isDriver: when true, we render a small thumbnail if driver image is selected and allow tap-to-enlarge
   Widget _buildFileUploadCard({
     required String label,
     required String? fileName,
     required VoidCallback onTap,
     required IconData icon,
+    bool isDriver = false,
   }) {
+    Widget trailing = const SizedBox.shrink();
+    // If this is the driver card and an image is selected, create a small thumbnail
+    if (isDriver && (_lastDriverPFile != null || _lastDriverXFile != null)) {
+      trailing = GestureDetector(
+        onTap: _openFullScreenDriverPreview,
+        child: FutureBuilder<Uint8List?>(
+          future: _loadDriverImageBytes(),
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), color: Colors.grey.shade200),
+                child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+              );
+            }
+            if (!snap.hasData || snap.data == null) {
+              // fallback small icon
+              return Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), color: Colors.grey.shade100),
+                child: Icon(Icons.image, color: Colors.grey.shade600),
+              );
+            }
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.memory(
+                snap.data!,
+                width: 46,
+                height: 46,
+                fit: BoxFit.cover,
+              ),
+            );
+          },
+        ),
+      );
+    } else if (fileName != null) {
+      trailing = Icon(Icons.check_circle, color: Colors.green.shade600, size: 18);
+    }
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           border: Border.all(color: _borderGray),
           borderRadius: BorderRadius.circular(8),
@@ -844,7 +993,8 @@ class _HomePageContentState extends State<HomePageContent> {
                 ),
               ),
             ),
-            if (fileName != null) Icon(Icons.check_circle, color: Colors.green.shade600, size: 18),
+            const SizedBox(width: 8),
+            trailing,
           ],
         ),
       ),

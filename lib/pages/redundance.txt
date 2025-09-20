@@ -1,5 +1,7 @@
 home_ui.dart -> should be replaced with home_page.dart
+verify.dart -> Old verification.dart without face verification
 
 Deletable:
 authentication.dart
 homeOld.dart
+verify.dart
