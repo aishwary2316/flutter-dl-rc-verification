@@ -26,12 +26,11 @@ class _HomePageContentState extends State<HomePageContent> {
   final String _verifyBaseUrl = '';
 
   // OCR model endpoints (use the exact working paths)
-  //final String _dlOcrUrl = 'https://dl-extractor-api-209690283535.us-central1.run.app/extract-dl';
   final String _dlOcrUrl = 'https://dl-extractor-service-777302308889.us-central1.run.app';
-  final String _rcOcrUrl = 'https://my-ml-api-995937866035.us-central1.run.app/recognize_plate/';
+  final String _rcOcrUrl = 'https://anpr-service-498410737975.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
-  final String _dlOcrFieldName = 'image_file'; // Changed to match new API
+  final String _dlOcrFieldName = 'image_file';
   final String _rcOcrFieldName = 'file';
   // ================================================
 
@@ -59,6 +58,11 @@ class _HomePageContentState extends State<HomePageContent> {
   XFile? _lastDriverXFile;
   PlatformFile? _lastDriverPFile;
 
+  // New state for RC alternatives
+  String? _rcOriginalPlate;
+  List<String> _rcPlateAlternatives = [];
+  int _currentRcAlternativeIndex = 0;
+
   // Loading / extracting states
   bool _isVerifying = false;
   bool _dlExtracting = false;
@@ -80,6 +84,26 @@ class _HomePageContentState extends State<HomePageContent> {
     if (_lastDriverXFile != null) return true;
     if (_lastDriverPFile != null) return true;
     return false;
+  }
+
+  // Cycles through the original plate and its alternatives
+  void _cycleRcAlternatives() {
+    if (_rcPlateAlternatives.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _currentRcAlternativeIndex++;
+      if (_currentRcAlternativeIndex > _rcPlateAlternatives.length) {
+        _currentRcAlternativeIndex = 0;
+      }
+
+      if (_currentRcAlternativeIndex == 0) {
+        _rcController.text = _rcOriginalPlate ?? '';
+      } else {
+        _rcController.text = _rcPlateAlternatives[_currentRcAlternativeIndex - 1];
+      }
+    });
   }
 
   // ----------------- Helpers: create MultipartFile ---------------------
@@ -129,20 +153,15 @@ class _HomePageContentState extends State<HomePageContent> {
     try {
       // Fix/append model-specific path if user provided a base host without path
       String effectiveUrl = uploadUrl;
-      if (effectiveUrl.contains('my-ml-api-995937866035.us-central1.run.app') &&
-          !effectiveUrl.contains('recognize_plate')) {
-        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/recognize_plate/';
-        debugPrint('Adjusted RC URL to: $effectiveUrl');
-      }
       if (effectiveUrl.contains('dl-extractor-service-777302308889.us-central1.run.app') &&
-          !effectiveUrl.contains('extract/')) { // Updated path
-        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/extract/'; // Updated path
+          !effectiveUrl.contains('extract/')) {
+        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/extract/';
         debugPrint('Adjusted DL URL to: $effectiveUrl');
       }
 
       // Choose field candidates: for DL prefer image_file, for RC prefer file
       final List<String> fieldCandidates = isDlModel
-          ? [primaryFieldName, 'image_file', 'dl_image', 'image', 'file'] // Updated to prioritize 'image_file'
+          ? [primaryFieldName, 'image_file', 'dl_image', 'image', 'file']
           : [primaryFieldName, 'file'];
 
       final Uri uri = Uri.parse(effectiveUrl);
@@ -175,13 +194,11 @@ class _HomePageContentState extends State<HomePageContent> {
           final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
 
           String? extractedValue;
+          List<String> alternatives = [];
 
           if (isDlModel) {
             // 1) prefer dl_numbers[0]
-            if (body != null &&
-                body['dl_numbers'] != null &&
-                body['dl_numbers'] is List &&
-                (body['dl_numbers'] as List).isNotEmpty) {
+            if (body != null && body['dl_numbers'] is List && (body['dl_numbers'] as List).isNotEmpty) {
               final first = (body['dl_numbers'] as List).first;
               if (first != null && first is String && first.trim().isNotEmpty) {
                 extractedValue = first.trim();
@@ -197,46 +214,38 @@ class _HomePageContentState extends State<HomePageContent> {
             // 3) fallback: hunt in raw_text for DL-like token
             if (extractedValue == null && body != null && body['raw_text'] != null) {
               String raw = (body['raw_text'] as String).toUpperCase();
-
-              // Normalize: replace non-alphanumeric with space (keeps letters+digits)
               final cleaned = raw.replaceAll(RegExp(r'[^A-Z0-9\s]'), ' ');
-              // Find candidate tokens 6..25 chars long
               final tokenReg = RegExp(r'\b([A-Z0-9]{6,25})\b', caseSensitive: false);
               final matches = tokenReg.allMatches(cleaned).map((m) => m.group(1)!).toList();
-
               String? best;
               for (final tok in matches) {
                 final letters = RegExp(r'[A-Z]').allMatches(tok).length;
                 final digits = RegExp(r'\d').allMatches(tok).length;
-                // heuristic: at least one letter and >=4 digits (DL numbers are long)
                 if (letters >= 1 && digits >= 4) {
                   best = tok;
                   break;
                 }
               }
-
-              // 4) looser pattern if none found above
               if (best == null) {
                 final loose = RegExp(r'([A-Z]{1,2}\s*\d{2,}\s*[A-Z0-9]{0,3}\s*\d{3,})', caseSensitive: false);
                 final m = loose.firstMatch(raw);
                 if (m != null) best = m.group(1);
               }
-
               if (best != null) {
-                // normalize
                 extractedValue = best.replaceAll(RegExp(r'\s+'), '');
               }
             }
           } else {
-            // RC model: prefer plate_number, then extracted_text, then raw_text regex
+            // RC model
             if (body != null && body['plate_number'] != null && (body['plate_number'] as String).trim().isNotEmpty) {
               extractedValue = (body['plate_number'] as String).trim();
-            }
-            if (extractedValue == null && body != null && body['extracted_text'] != null) {
+              if (body['alternatives'] is List && (body['alternatives'] as List).isNotEmpty) {
+                alternatives.addAll(body['alternatives'].cast<String>());
+              }
+            } else if (body != null && body['extracted_text'] != null) {
               final t = (body['extracted_text'] as String).trim();
               if (t.isNotEmpty) extractedValue = t;
-            }
-            if (extractedValue == null && body != null && body['raw_text'] != null) {
+            } else if (body != null && body['raw_text'] != null) {
               final raw = (body['raw_text'] as String).toUpperCase();
               final reg = RegExp(r'([A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,2}\s*\d{3,4})', caseSensitive: false);
               final match = reg.firstMatch(raw);
@@ -245,6 +254,13 @@ class _HomePageContentState extends State<HomePageContent> {
           }
 
           if (extractedValue != null && extractedValue.isNotEmpty) {
+            if (!isDlModel) {
+              setState(() {
+                _rcOriginalPlate = extractedValue;
+                _rcPlateAlternatives = alternatives;
+                _currentRcAlternativeIndex = 0;
+              });
+            }
             controller.text = extractedValue;
             if (body != null && body['filename'] != null) {
               setFileName(body['filename'] as String);
@@ -771,6 +787,8 @@ class _HomePageContentState extends State<HomePageContent> {
                     hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
                     prefixIcon: Icons.directions_car,
                     enabled: !_rcExtracting,
+                    showAlternateButton: _rcPlateAlternatives.isNotEmpty,
+                    onAlternatePressed: _cycleRcAlternatives,
                   ),
 
                   const SizedBox(height: 24),
@@ -1007,6 +1025,8 @@ class _HomePageContentState extends State<HomePageContent> {
     required String hint,
     required IconData prefixIcon,
     bool enabled = true,
+    bool showAlternateButton = false,
+    VoidCallback? onAlternatePressed,
   }) {
     return TextFormField(
       controller: controller,
@@ -1016,6 +1036,12 @@ class _HomePageContentState extends State<HomePageContent> {
         labelText: label,
         hintText: hint,
         prefixIcon: Icon(prefixIcon, size: 18),
+        suffixIcon: showAlternateButton
+            ? IconButton(
+          icon: const Icon(Icons.refresh),
+          onPressed: onAlternatePressed,
+        )
+            : null,
         filled: true,
         fillColor: Colors.grey.shade50,
         border: OutlineInputBorder(

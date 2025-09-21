@@ -5,3 +5,16 @@ Deletable:
 authentication.dart
 homeOld.dart
 verify.dart
+
+
+TODO
+1) Add Face in Blacklist management
+   - Make a gallery like page to view all suspects /list_suspects
+   - Add suspect removal /delete_suspect
+   - Add suspect inclusion /add_suspect
+2) Fix blacklist removal still shows suspicious as crime is not removed
+3) UI Enhancement
+4) App logo setup
+5) App name setup
+6) App versioning setup
+7) App splash screen setup
