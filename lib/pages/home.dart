@@ -617,45 +617,51 @@ class _HomePageContentState extends State<HomePageContent> {
         return Dialog(
           insetPadding: const EdgeInsets.all(0),
           backgroundColor: Colors.black,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: FutureBuilder<Uint8List?>(
-                  future: _loadDriverImageBytes(),
-                  builder: (context, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator(color: Colors.white));
-                    }
-                    if (!snap.hasData || snap.data == null) {
-                      return const Center(child: Text('Unable to load image', style: TextStyle(color: Colors.white)));
-                    }
-                    return InteractiveViewer(
-                      maxScale: 5.0,
-                      child: Center(
-                        child: Image.memory(
-                          snap.data!,
-                          fit: BoxFit.contain,
+          child: ConstrainedBox( // Responsive container for the image
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(ctx).size.width * 0.9,
+              maxHeight: MediaQuery.of(ctx).size.height * 0.9,
+            ),
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: FutureBuilder<Uint8List?>(
+                    future: _loadDriverImageBytes(),
+                    builder: (context, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator(color: Colors.white));
+                      }
+                      if (!snap.hasData || snap.data == null) {
+                        return const Center(child: Text('Unable to load image', style: TextStyle(color: Colors.white)));
+                      }
+                      return InteractiveViewer(
+                        maxScale: 5.0,
+                        child: Center(
+                          child: Image.memory(
+                            snap.data!,
+                            fit: BoxFit.contain,
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-              // Close button top-right
-              Positioned(
-                top: 28,
-                right: 16,
-                child: SafeArea(
-                  child: CircleAvatar(
-                    backgroundColor: Colors.black45,
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () => Navigator.of(ctx).pop(),
+                // Close button top-right
+                Positioned(
+                  top: 28,
+                  right: 16,
+                  child: SafeArea(
+                    child: CircleAvatar(
+                      backgroundColor: Colors.black45,
+                      child: IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -688,6 +694,9 @@ class _HomePageContentState extends State<HomePageContent> {
   // ----------------- Build UI (kept same & minimal) -------------------
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final double horizontalPadding = screenWidth > 600 ? screenWidth * 0.1 : 16.0;
+
     return Container(
       color: _lightGray,
       child: SingleChildScrollView(
@@ -718,168 +727,170 @@ class _HomePageContentState extends State<HomePageContent> {
             const SizedBox(height: 20),
 
             // Main form container
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Driving License Section
-                  _buildSectionHeader(
-                    icon: Icons.credit_card,
-                    title: 'Upload Driving License',
-                    subtitle: 'Upload your driving license document',
-                  ),
-                  const SizedBox(height: 16),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Driving License Section
+                    _buildSectionHeader(
+                      icon: Icons.credit_card,
+                      title: 'Upload Driving License',
+                      subtitle: 'Upload your driving license document',
+                    ),
+                    const SizedBox(height: 16),
 
-                  _buildFileUploadCard(
-                    label: 'Choose Driving License File',
-                    fileName: _dlImageName,
-                    onTap: _pickDlImage,
-                    icon: Icons.upload_file,
-                    isDriver: false,
-                  ),
+                    _buildFileUploadCard(
+                      label: 'Choose Driving License File',
+                      fileName: _dlImageName,
+                      onTap: _pickDlImage,
+                      icon: Icons.upload_file,
+                      isDriver: false,
+                    ),
 
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  _buildTextInput(
-                    controller: _dlController,
-                    label: 'Driving License Number',
-                    hint: _dlExtracting ? 'Extracting...' : 'Select image or enter manually',
-                    prefixIcon: Icons.confirmation_number,
-                    enabled: !_dlExtracting,
-                  ),
+                    _buildTextInput(
+                      controller: _dlController,
+                      label: 'Driving License Number',
+                      hint: _dlExtracting ? 'Extracting...' : 'Select image or enter manually',
+                      prefixIcon: Icons.confirmation_number,
+                      enabled: !_dlExtracting,
+                    ),
 
-                  const SizedBox(height: 24),
+                    const SizedBox(height: 24),
 
-                  // Vehicle Registration Section
-                  _buildSectionHeader(
-                    icon: Icons.directions_car,
-                    title: 'Upload Vehicle Registration Number (Number Plate Number)',
-                    subtitle: 'Upload your vehicle registration certificate',
-                  ),
-                  const SizedBox(height: 16),
+                    // Vehicle Registration Section
+                    _buildSectionHeader(
+                      icon: Icons.directions_car,
+                      title: 'Upload Vehicle Registration Number (Number Plate Number)',
+                      subtitle: 'Upload your vehicle registration certificate',
+                    ),
+                    const SizedBox(height: 16),
 
-                  _buildFileUploadCard(
-                    label: 'Choose Vehicle Registration File',
-                    fileName: _rcImageName,
-                    onTap: _pickRcImage,
-                    icon: Icons.upload_file,
-                    isDriver: false,
-                  ),
+                    _buildFileUploadCard(
+                      label: 'Choose Vehicle Registration File',
+                      fileName: _rcImageName,
+                      onTap: _pickRcImage,
+                      icon: Icons.upload_file,
+                      isDriver: false,
+                    ),
 
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  _buildTextInput(
-                    controller: _rcController,
-                    label: 'Vehicle Number',
-                    hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
-                    prefixIcon: Icons.directions_car,
-                    enabled: !_rcExtracting,
-                    showAlternateButton: _rcPlateAlternatives.isNotEmpty,
-                    onAlternatePressed: _cycleRcAlternatives,
-                  ),
+                    _buildTextInput(
+                      controller: _rcController,
+                      label: 'Vehicle Number',
+                      hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
+                      prefixIcon: Icons.directions_car,
+                      enabled: !_rcExtracting,
+                      showAlternateButton: _rcPlateAlternatives.isNotEmpty,
+                      onAlternatePressed: _cycleRcAlternatives,
+                    ),
 
-                  const SizedBox(height: 24),
+                    const SizedBox(height: 24),
 
-                  // Driver Image Section
-                  _buildSectionHeader(
-                    icon: Icons.person,
-                    title: 'Upload Driver Image',
-                    subtitle: 'Upload a clear photo of the driver',
-                  ),
-                  const SizedBox(height: 16),
+                    // Driver Image Section
+                    _buildSectionHeader(
+                      icon: Icons.person,
+                      title: 'Upload Driver Image',
+                      subtitle: 'Upload a clear photo of the driver',
+                    ),
+                    const SizedBox(height: 16),
 
-                  _buildFileUploadCard(
-                    label: 'Choose Driver Image File',
-                    fileName: _driverImageName,
-                    onTap: _pickDriverImage,
-                    icon: Icons.person_add_alt_1,
-                    isDriver: true, // <--- show thumbnail + preview behavior
-                  ),
+                    _buildFileUploadCard(
+                      label: 'Choose Driver Image File',
+                      fileName: _driverImageName,
+                      onTap: _pickDriverImage,
+                      icon: Icons.person_add_alt_1,
+                      isDriver: true, // <--- show thumbnail + preview behavior
+                    ),
 
-                  const SizedBox(height: 32),
+                    const SizedBox(height: 32),
 
-                  // Verify Information Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: _isVerifying || !_hasInput ? null : _handleVerification,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _primaryBlue,
-                        foregroundColor: Colors.white,
-                        elevation: 2,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                    // Verify Information Button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _isVerifying || !_hasInput ? null : _handleVerification,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _primaryBlue,
+                          foregroundColor: Colors.white,
+                          elevation: 2,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          disabledBackgroundColor: Colors.grey.shade400,
                         ),
-                        disabledBackgroundColor: Colors.grey.shade400,
+                        child: _isVerifying
+                            ? Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Text('Verifying...', style: TextStyle(fontSize: 16)),
+                          ],
+                        )
+                            : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            Icon(Icons.verified_user, size: 20),
+                            SizedBox(width: 8),
+                            Text('Verify Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
                       ),
-                      child: _isVerifying
-                          ? Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Info note
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.blue.shade600, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'AI-powered verification will extract information from uploaded documents automatically.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue.shade700,
+                              ),
                             ),
                           ),
-                          SizedBox(width: 12),
-                          Text('Verifying...', style: TextStyle(fontSize: 16)),
-                        ],
-                      )
-                          : Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Icon(Icons.verified_user, size: 20),
-                          SizedBox(width: 8),
-                          Text('Verify Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                         ],
                       ),
                     ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Info note
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.blue.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.blue.shade600, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'AI-powered verification will extract information from uploaded documents automatically.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blue.shade700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
 

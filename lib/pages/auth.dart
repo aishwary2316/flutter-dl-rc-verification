@@ -1,12 +1,22 @@
 // lib/pages/auth.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
 import 'home_page.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Make the native status bar transparent so our top container shows through.
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.dark,
+    statusBarBrightness: Brightness.light,
+  ));
+
   runApp(const AuthPage());
 }
 
@@ -70,35 +80,23 @@ class _LoginPageState extends State<LoginPage> {
       return s == 'true' || s == '1' || s == 'yes';
     }
 
-
     try {
-      // Call ApiService.login (ApiService has internal prints if instrumented)
       print('auth.dart -> attempting login for: $email');
       final result = await api.login(email, password);
       print('auth.dart -> login result: $result');
 
       if (result['ok'] == true) {
         final data = result['data'] ?? {};
-
-        // Save non-sensitive user metadata in SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         final String name = data['name'] ?? data['username'] ?? '';
         final String userId = data['userId']?.toString() ?? data['id']?.toString() ?? '';
         final String userEmail = data['email'] ?? email;
         final String role = data['role'] ?? '';
-        //final bool isActive = (data['isActive'] == true) || (data['isActive']?.toString().toLowerCase() == 'true');
         final dynamic rawActive = data['isActive'];
         final bool isActive = rawActive == true ||
             rawActive == 1 ||
             rawActive?.toString().trim().toLowerCase() == 'true' ||
             rawActive?.toString().trim() == '1';
-
-        print('\n\n\n isActive = ');
-        print(isActive);
-        print('\n\n\n');
-        print('LOGIN RAW isActive: ${data['isActive']} (type: ${data['isActive']?.runtimeType})');
-        print('\n\n\n');
-
 
         final String loginTimeIso = DateTime.now().toIso8601String();
 
@@ -109,11 +107,7 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setBool('user_is_active', isActive);
         await prefs.setString('user_login_time', loginTimeIso);
 
-
-        // If ApiService saved JWT on login, it's already stored securely.
-
         if (!mounted) return;
-        // Open the provided home_page.dart and pass the user details
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => HomePage(
@@ -131,7 +125,6 @@ class _LoginPageState extends State<LoginPage> {
           _error = msg;
         });
 
-        // Provide immediate user feedback
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Login failed: $msg')));
         }
@@ -160,23 +153,26 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Widget _buildLoginCard(BuildContext context) {
+  Widget _buildLoginCard(BuildContext context, double parentWidth) {
+    final double horizontalPadding = (parentWidth > 420) ? 34 : 20;
+    const double verticalPadding = 28;
+
     return Center(
-      child: SizedBox(
-        width: 400,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, minWidth: 280),
         child: Card(
-          elevation: 5,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          elevation: 6,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           child: Padding(
-            padding: const EdgeInsets.all(30),
+            padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: verticalPadding),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const Text(
                   'Operator Login',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.indigo),
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.indigo),
                 ),
-                const SizedBox(height: 30),
+                const SizedBox(height: 24),
                 const Align(
                     alignment: Alignment.centerLeft,
                     child: Text('Email', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -187,10 +183,10 @@ class _LoginPageState extends State<LoginPage> {
                   decoration: InputDecoration(
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     hintText: 'someone@example.com',
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 18),
                 const Align(
                     alignment: Alignment.centerLeft,
                     child: Text('Password', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
@@ -201,10 +197,10 @@ class _LoginPageState extends State<LoginPage> {
                   decoration: InputDecoration(
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     hintText: 'Shhhh...',
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 Row(
                   children: <Widget>[
                     Checkbox(
@@ -220,13 +216,13 @@ class _LoginPageState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 10),
                 if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: _loading ? null : _signIn,
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       backgroundColor: Colors.indigo[800],
                     ),
@@ -252,33 +248,70 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    // NOTE: we set SafeArea(top: false) because we are explicitly drawing a
+    // top bar of exact status-bar height so we don't want SafeArea to add extra top padding.
     return Scaffold(
       backgroundColor: Colors.indigo[50],
-      body: SingleChildScrollView(
-        child: Column(
-          children: <Widget>[
-            Container(
-              color: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              child: Row(
-                children: [
-                  // Replace with your asset or remove if not present
-                  Image.asset('assets/india_gov.png', height: 50, errorBuilder: (c, o, s) => const SizedBox()),
-                  const SizedBox(width: 10),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                      Text('MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.indigo)),
-                    ],
+      body: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final double height = constraints.maxHeight;
+            final double width = constraints.maxWidth;
+            // height reserved for content spacing
+            final double topSpacing = (height * 0.14).clamp(24.0, 220.0);
+            final double bottomSpacing = (height * 0.08).clamp(20.0, 140.0);
+
+            // exact status bar height
+            final double statusBarHeight = MediaQuery.of(context).padding.top;
+
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  // This top bar has the same color as the scaffold background
+                  // and sits *under* the native status bar because we made it transparent.
+                  // This creates the illusion that the status bar is Colors.indigo[50].
+                  Container(height: statusBarHeight, width: double.infinity, color: Colors.white),
+
+                  // HEADER: full width, NO outer margin
+                  Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    child: Row(
+                      children: [
+                        Image.asset('assets/india_gov.png', height: 50, errorBuilder: (c, o, s) => const SizedBox()),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                              Text('MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Remaining content (keeps internal padding)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                    child: Column(
+                      children: [
+                        SizedBox(height: topSpacing),
+                        _buildLoginCard(context, width),
+                        SizedBox(height: bottomSpacing),
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ),
-            SizedBox(height: MediaQuery.of(context).size.height * 0.2),
-            _buildLoginCard(context),
-          ],
+            );
+          },
         ),
       ),
     );

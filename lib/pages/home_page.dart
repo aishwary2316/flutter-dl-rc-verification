@@ -36,7 +36,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   static const Color _headerBlue = Color(0xFF1E40AF);
-  final double _menuWidth = 220;
   late bool _isActive;
   int _selectedIndex = 0;
 
@@ -84,13 +83,12 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _showCustomMenu(BuildContext context) async {
     final media = MediaQuery.of(context);
-    final screenWidth = media.size.width;
     final double top = media.padding.top + kToolbarHeight;
-    final double left = screenWidth - _menuWidth - 12;
+    final double right = 12;
 
     final selected = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(left, top, 12, 0),
+      position: RelativeRect.fromLTRB(media.size.width - 220, top, right, 0),
       items: <PopupMenuEntry<String>>[
         PopupMenuItem<String>(
           value: 'settings',

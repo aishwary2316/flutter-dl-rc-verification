@@ -240,19 +240,26 @@ class _UserManagementPageState extends State<UserManagementPage> {
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Recreate user', style: TextStyle(fontWeight: FontWeight.bold)),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('Recreating user ${existingUser['email'] ?? existingUser['name'] ?? ''} with role $newRole'),
-            const SizedBox(height: 16),
-            TextField(
-              controller: pwdCtrl,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: 'New password',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                prefixIcon: const Icon(Icons.lock),
-              ),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(ctx).size.width * 0.8,
             ),
-          ]),
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text('Recreating user ${existingUser['email'] ?? existingUser['name'] ?? ''} with role $newRole'),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: pwdCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'New password',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon: const Icon(Icons.lock),
+                  ),
+                ),
+              ]),
+            ),
+          ),
           actions: [
             TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
             ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Recreate')),
@@ -318,7 +325,11 @@ class _UserManagementPageState extends State<UserManagementPage> {
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Text(text),
+        content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(ctx).size.width * 0.8,
+            ),
+            child: Text(text)),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
           ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Yes')),
@@ -337,58 +348,63 @@ class _UserManagementPageState extends State<UserManagementPage> {
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Add User', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Form(
-          key: _addFormKey,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              TextFormField(
-                controller: _addName,
-                validator: (v) => v == null || v.trim().isEmpty ? 'Name required' : null,
-                decoration: InputDecoration(
-                  labelText: 'Name',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.person_outline),
+        content: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(ctx).size.width * 0.8,
+          ),
+          child: Form(
+            key: _addFormKey,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextFormField(
+                  controller: _addName,
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Name required' : null,
+                  decoration: InputDecoration(
+                    labelText: 'Name',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon: const Icon(Icons.person_outline),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _addEmail,
-                validator: (v) => v == null || v.trim().isEmpty ? 'Email required' : null,
-                decoration: InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.email_outlined),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _addEmail,
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Email required' : null,
+                  decoration: InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon: const Icon(Icons.email_outlined),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _addPassword,
-                validator: (v) => v == null || v.trim().isEmpty ? 'Password required' : null,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.lock_outline),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _addPassword,
+                  validator: (v) => v == null || v.trim().isEmpty ? 'Password required' : null,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                decoration: InputDecoration(
-                  labelText: 'Role',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.work_outline),
-                ),
-                value: _addRole,
-                items: const [
-                  DropdownMenuItem(value: 'superadmin', child: Text('Super Admin')),
-                  DropdownMenuItem(value: 'admin', child: Text('Admin')),
-                  DropdownMenuItem(value: 'enduser', child: Text('End User')),
-                ],
-                onChanged: (v) {
-                  if (v != null) setState(() => _addRole = v);
-                },
-              )
-            ]),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  decoration: InputDecoration(
+                    labelText: 'Role',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon: const Icon(Icons.work_outline),
+                  ),
+                  value: _addRole,
+                  items: const [
+                    DropdownMenuItem(value: 'superadmin', child: Text('Super Admin')),
+                    DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                    DropdownMenuItem(value: 'enduser', child: Text('End User')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _addRole = v);
+                  },
+                )
+              ]),
+            ),
           ),
         ),
         actions: [
@@ -443,10 +459,11 @@ class _UserManagementPageState extends State<UserManagementPage> {
                       const SizedBox(height: 4),
                       Text(email, style: const TextStyle(color: Colors.black54)),
                       const SizedBox(height: 8),
-                      Row(
+                      Wrap( // Using Wrap to prevent overflow on small screens
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
                           _buildRoleBadge(role),
-                          const SizedBox(width: 8),
                           _buildStatusBadge(isActive),
                         ],
                       ),
@@ -584,7 +601,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Raw JSON'),
-        content: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(item))),
+        content: SizedBox(
+          width: MediaQuery.of(ctx).size.width * 0.8,
+          child: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(item))),
+        ),
         actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close'))],
       ),
     );

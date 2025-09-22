@@ -1,12 +1,18 @@
+// lib/pages/blacklist_management.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
+import 'error.dart';
 
 /// Blacklist Management (wired to ApiService)
 class BlacklistManagementPage extends StatefulWidget {
-  final String role; // <-- Add this line
+  final String role;
 
   const BlacklistManagementPage({super.key, required this.role});
 
@@ -15,26 +21,31 @@ class BlacklistManagementPage extends StatefulWidget {
 }
 
 class _BlacklistManagementPageState extends State<BlacklistManagementPage>
-    with SingleTickerProviderStateMixin { // <-- Corrected mixin name
+    with SingleTickerProviderStateMixin {
   final ApiService _api = ApiService();
 
   final int _limit = 20;
 
   bool _loadingDL = false;
   bool _loadingRC = false;
+  bool _loadingFace = false;
   String? _errorDL;
   String? _errorRC;
+  String? _errorFace;
 
   List<Map<String, dynamic>> _dlList = [];
   List<Map<String, dynamic>> _rcList = [];
+  Map<String, dynamic> _faceMap = {};
   int _dlTotal = 0;
   int _rcTotal = 0;
+  int _faceTotal = 0;
   int _dlPage = 1;
   int _rcPage = 1;
   bool _isSearching = false;
 
   final TextEditingController _dlSearchCtrl = TextEditingController();
   final TextEditingController _rcSearchCtrl = TextEditingController();
+  final TextEditingController _faceSearchCtrl = TextEditingController();
 
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _typeCtrl = TextEditingController(text: 'dl');
@@ -49,21 +60,25 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     'wheel': TextEditingController(),
   };
 
+  final _faceAddFormKey = GlobalKey<FormState>();
+  final TextEditingController _faceAddName = TextEditingController();
+  XFile? _faceAddImage;
+
   late TabController _tabController;
   final ScrollController _dlScroll = ScrollController();
   final ScrollController _rcScroll = ScrollController();
+  final ScrollController _faceScroll = ScrollController();
 
-  // debounce timers
   Timer? _dlDebounce;
   Timer? _rcDebounce;
+  Timer? _faceDebounce;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(() => setState(() {})); // ensure UI updates on tab change
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() => setState(() {}));
 
-    // search listeners (debounce)
     _dlSearchCtrl.addListener(() {
       _dlDebounce?.cancel();
       _dlDebounce = Timer(const Duration(milliseconds: 400), () => _fetchDLs(page: 1));
@@ -72,9 +87,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       _rcDebounce?.cancel();
       _rcDebounce = Timer(const Duration(milliseconds: 400), () => _fetchRCs(page: 1));
     });
+    _faceSearchCtrl.addListener(() {
+      _faceDebounce?.cancel();
+      _faceDebounce = Timer(const Duration(milliseconds: 400), () => _fetchFaces());
+    });
 
     _fetchDLs();
     _fetchRCs();
+    _fetchFaces();
 
     _dlScroll.addListener(() {
       if (_dlScroll.position.pixels > _dlScroll.position.maxScrollExtent - 200 &&
@@ -97,18 +117,22 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   void dispose() {
     _dlDebounce?.cancel();
     _rcDebounce?.cancel();
+    _faceDebounce?.cancel();
     _dlSearchCtrl.dispose();
     _rcSearchCtrl.dispose();
+    _faceSearchCtrl.dispose();
     _formCtrls.forEach((key, ctrl) => ctrl.dispose());
     _typeCtrl.dispose();
+    _faceAddName.dispose();
     _tabController.dispose();
     _dlScroll.dispose();
     _rcScroll.dispose();
+    _faceScroll.dispose();
     super.dispose();
   }
 
   /// -----------------------
-  /// Fetching functions (use ApiService)
+  /// Fetching functions
   /// -----------------------
   Future<void> _fetchDLs({int page = 1}) async {
     setState(() {
@@ -121,10 +145,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       final resp = await _api.getBlacklistedDLs(page: page, limit: _limit, search: q);
       if (resp['ok'] == true) {
         final body = resp['data'];
-        // Defensive parsing
         List<Map<String, dynamic>> dataList = [];
         int pageGot = page;
-        int pagesGot = 1;
         int totalGot = 0;
 
         if (body is Map) {
@@ -133,7 +155,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             dataList = List<Map<String, dynamic>>.from(rawList.map((e) => Map<String, dynamic>.from(e as Map)));
           }
           pageGot = body['page'] ?? page;
-          pagesGot = body['pages'] ?? body['totalPages'] ?? 1;
           totalGot = body['total'] ?? dataList.length;
         } else if (body is List) {
           dataList = List<Map<String, dynamic>>.from(body.map((e) => Map<String, dynamic>.from(e as Map)));
@@ -169,7 +190,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         final body = resp['data'];
         List<Map<String, dynamic>> dataList = [];
         int pageGot = page;
-        int pagesGot = 1;
         int totalGot = 0;
 
         if (body is Map) {
@@ -178,7 +198,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             dataList = List<Map<String, dynamic>>.from(rawList.map((e) => Map<String, dynamic>.from(e as Map)));
           }
           pageGot = body['page'] ?? page;
-          pagesGot = body['pages'] ?? body['totalPages'] ?? 1;
           totalGot = body['total'] ?? dataList.length;
         } else if (body is List) {
           dataList = List<Map<String, dynamic>>.from(body.map((e) => Map<String, dynamic>.from(e as Map)));
@@ -201,13 +220,81 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     }
   }
 
+  Future<void> _fetchFaces() async {
+    setState(() {
+      _loadingFace = true;
+      _errorFace = null;
+    });
+
+    try {
+      final resp = await _api.listSuspects();
+      if (resp['ok'] == true) {
+        final body = resp['data'];
+        final Map<String, List<String>> faceMap = {};
+
+        if (body is Map) {
+          body.forEach((key, value) {
+            if (value is List) {
+              if (key == 'known_faces') {
+                for (var url in value) {
+                  if (url is String) {
+                    final uri = Uri.parse(url);
+                    final pathSegments = uri.pathSegments;
+                    if (pathSegments.length >= 2) {
+                      final personName = pathSegments[pathSegments.length - 2];
+                      if (personName.isNotEmpty) {
+                        if (!faceMap.containsKey(personName)) {
+                          faceMap[personName] = [];
+                        }
+                        faceMap[personName]!.add(url);
+                      }
+                    }
+                  }
+                }
+              } else {
+                final personName = key;
+                if (!faceMap.containsKey(personName)) {
+                  faceMap[personName] = [];
+                }
+                faceMap[personName]!.addAll(List<String>.from(value));
+              }
+            }
+          });
+        }
+
+        final q = _faceSearchCtrl.text.trim().toLowerCase();
+        final Map<String, List<String>> filteredMap = q.isEmpty
+            ? faceMap
+            : {
+          for (var entry in faceMap.entries)
+            if (entry.key.toLowerCase().contains(q)) entry.key: entry.value
+        };
+        setState(() {
+          _faceMap = filteredMap;
+          _faceTotal = _faceMap.length;
+        });
+      } else {
+        setState(() => _errorFace = resp['message'] ?? 'Failed to load face suspects');
+      }
+    } catch (e) {
+      setState(() => _errorFace = 'Error loading face suspects: $e');
+    } finally {
+      setState(() => _loadingFace = false);
+    }
+  }
+
   /// -----------------------
-  /// Add & Remove (use ApiService)
+  /// Add & Remove functions
   /// -----------------------
   Future<void> _addToBlacklist() async {
     if (!_formKey.currentState!.validate()) return;
 
     final type = _typeCtrl.text.trim();
+    if (type == 'face') {
+      _addFaceSuspect();
+      return;
+    }
+
     final payload = <String, dynamic>{
       'type': type,
       'number': _formCtrls['number']!.text.trim(),
@@ -238,7 +325,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         }
         if (type == 'dl') await _fetchDLs(page: 1);
         else await _fetchRCs(page: 1);
-        Navigator.of(context).pop(); // close bottom sheet
+        Navigator.of(context).pop();
       } else {
         if (mounted) {
           final msg = resp['message'] ?? 'Failed to add';
@@ -255,14 +342,79 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     }
   }
 
-  /// Call API to mark valid. Returns true on success.
+  Future<void> _addFaceSuspect() async {
+    if (!_faceAddFormKey.currentState!.validate()) return;
+    if (_faceAddImage == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select an image'), backgroundColor: Colors.red));
+      }
+      return;
+    }
+
+    Navigator.of(context).pop();
+    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+
+    try {
+      final resp = await _api.addSuspectFromFace(
+        personName: _faceAddName.text.trim(),
+        imagePath: _faceAddImage!.path,
+      );
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+
+      if (resp['ok'] == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect added successfully!'), backgroundColor: Colors.green));
+        }
+        _fetchFaces();
+      } else {
+        if (mounted) {
+          final msg = resp['message'] ?? 'Failed to add face suspect';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+        }
+      }
+    } catch (e) {
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  Future<void> _deleteFaceSuspect(String personName) async {
+    final confirmed = await _showConfirmDialog('Are you sure you want to delete $personName from the suspect list?');
+    if (confirmed != true) return;
+
+    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+
+    try {
+      final resp = await _api.deleteSuspectFromFace(personName);
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+
+      if (resp['ok'] == true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect deleted successfully!'), backgroundColor: Colors.green));
+        }
+        _fetchFaces();
+      } else {
+        if (mounted) {
+          final msg = resp['message'] ?? 'Failed to delete suspect';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+        }
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+    }
+  }
+
   Future<bool> _markValid(String type, String id) async {
     try {
       final resp = await _api.markBlacklistValid(type: type, id: id);
       if (resp['ok'] == true) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entry marked valid (removed)'), backgroundColor: Colors.green));
-        if (type == 'dl') await _fetchDLs(page: 1);
-        else await _fetchRCs(page: 1);
+        if (type == 'dl') {
+          await _fetchDLs(page: 1);
+        } else {
+          await _fetchRCs(page: 1);
+        }
         return true;
       } else {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(resp['message'] ?? 'Failed to mark valid'), backgroundColor: Colors.red));
@@ -284,6 +436,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     if (error != null && list.isEmpty) {
       return Center(child: Text(error, style: const TextStyle(color: Colors.red)));
     }
+
     if (list.isEmpty) {
       return Center(
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -293,7 +446,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           ]));
     }
 
-    // Determine if swipe-to-remove should be enabled
     final isSuperAdmin = widget.role == 'superadmin';
     final dismissDirection = isSuperAdmin ? DismissDirection.endToStart : DismissDirection.none;
 
@@ -320,7 +472,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
           return Dismissible(
             key: ValueKey(id + '-$i'),
-            direction: dismissDirection, // Use the determined dismiss direction
+            direction: dismissDirection,
             background: Container(
               alignment: Alignment.centerRight,
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -330,7 +482,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             confirmDismiss: (direction) async {
               final confirmed = await _showConfirmDialog('Mark this ${type.toUpperCase()} as valid (remove from blacklist)?');
               if (confirmed != true) return false;
-              // perform API call here and only allow dismiss if success
               final ok = await _markValid(type, id.toString());
               return ok;
             },
@@ -349,7 +500,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                   label: Text(status.isNotEmpty ? status : '-', style: TextStyle(color: status.toLowerCase().contains('black') ? Colors.red.shade700 : Colors.green.shade700)),
                   backgroundColor: status.toLowerCase().contains('black') ? Colors.red.shade50 : Colors.green.shade50,
                 ),
-                onTap: () => _showEntryDetails(entry, type: type),
+                onTap: () => _showEntryDetails(context, entry, type: type),
               ),
             ),
           );
@@ -357,6 +508,103 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       ),
     );
   }
+
+  Widget _buildFaceListContent(String? error, bool loading, ScrollController scrollController) {
+    if (loading && _faceMap.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (error != null && _faceMap.isEmpty) {
+      return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(error, style: const TextStyle(color: Colors.red, fontSize: 16)),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _fetchFaces,
+                child: const Text('Retry'),
+              ),
+            ],
+          ));
+    }
+
+    if (_faceMap.isEmpty) {
+      return Center(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.face_retouching_off, size: 60, color: Colors.black38),
+            const SizedBox(height: 16),
+            const Text('No face suspects found.', style: TextStyle(fontSize: 18, color: Colors.black54)),
+          ]));
+    }
+
+    final isSuperAdmin = widget.role == 'superadmin';
+    final dismissDirection = isSuperAdmin ? DismissDirection.endToStart : DismissDirection.none;
+    final filteredKeys = _faceMap.keys.toList();
+
+    return RefreshIndicator(
+      onRefresh: _fetchFaces,
+      child: ListView.builder(
+        controller: scrollController,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: filteredKeys.length,
+        itemBuilder: (ctx, i) {
+          final personName = filteredKeys[i];
+          final List<dynamic> images = _faceMap[personName]!;
+
+          final imageUrl = _convertGsUrlToHttp(images.isNotEmpty ? images.first : null);
+
+          return Dismissible(
+            key: ValueKey(personName),
+            direction: dismissDirection,
+            background: Container(
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              decoration: BoxDecoration(color: Colors.red.shade100, borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.delete_forever, color: Colors.red),
+            ),
+            confirmDismiss: (direction) async {
+              final confirmed = await _showConfirmDialog('Are you sure you want to delete $personName from the suspect list?');
+              if (confirmed != true) return false;
+              await _deleteFaceSuspect(personName);
+              return true;
+            },
+            child: Card(
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: imageUrl != null
+                      ? Image.network(imageUrl, width: 50, height: 50, fit: BoxFit.cover, errorBuilder: (c, o, s) => const Icon(Icons.person, size: 50))
+                      : const Icon(Icons.person, size: 50),
+                ),
+                title: Text(personName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('${images.length} photo${images.length == 1 ? '' : 's'}'),
+                onTap: () => _showSuspectDetails(context, personName, images),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  String? _convertGsUrlToHttp(String? gsUrl) {
+    if (gsUrl == null || !gsUrl.startsWith('gs://')) {
+      return null;
+    }
+    final parts = gsUrl.substring(5).split('/');
+    if (parts.length < 2) {
+      return null;
+    }
+    final bucket = parts.first;
+    final path = parts.sublist(1).join('/');
+    return 'https://storage.googleapis.com/$bucket/$path';
+  }
+
 
   Widget _buildSubtitle(Map<String, dynamic> entry, String type) {
     List<Widget> children = [];
@@ -398,7 +646,12 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
   void _showAddBottomSheet() {
     _formCtrls.forEach((key, ctrl) => ctrl.clear());
-    _typeCtrl.text = _tabController.index == 0 ? 'dl' : 'rc';
+    _faceAddName.clear();
+    _faceAddImage = null;
+
+    if (_tabController.index == 0) _typeCtrl.text = 'dl';
+    else if (_tabController.index == 1) _typeCtrl.text = 'rc';
+    else _typeCtrl.text = 'face';
 
     showModalBottomSheet(
       isScrollControlled: true,
@@ -406,11 +659,13 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setState) {
+          final mediaQuery = MediaQuery.of(context);
+          final isPortrait = mediaQuery.orientation == Orientation.portrait;
           return Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, top: 20, left: 20, right: 20),
+            padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom, top: 20, left: isPortrait ? 20 : 40, right: isPortrait ? 20 : 40),
             child: SingleChildScrollView(
               child: Form(
-                key: _formKey,
+                key: _typeCtrl.text == 'face' ? _faceAddFormKey : _formKey,
                 child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                     Text('Add New Blacklist Entry', style: Theme.of(context).textTheme.titleLarge),
@@ -423,39 +678,95 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                     items: const [
                       DropdownMenuItem(value: 'dl', child: Text('Driving License (DL)')),
                       DropdownMenuItem(value: 'rc', child: Text('Registration Certificate (RC)')),
+                      DropdownMenuItem(value: 'face', child: Text('Face Suspect')),
                     ],
                     onChanged: (v) {
                       if (v != null) setState(() => _typeCtrl.text = v);
                     },
                   ),
                   const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _formCtrls['number'],
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'This field is required' : null,
-                    decoration: InputDecoration(labelText: _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number', border: const OutlineInputBorder()),
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(controller: _formCtrls['crime'], decoration: const InputDecoration(labelText: 'Reason for Blacklisting (optional)', border: const OutlineInputBorder())),
-                  const SizedBox(height: 16),
-                  TextFormField(controller: _formCtrls['name'], decoration: InputDecoration(labelText: _typeCtrl.text == 'dl' ? 'Name (optional)' : 'Owner Name (optional)', border: const OutlineInputBorder())),
-                  const SizedBox(height: 16),
-                  if (_typeCtrl.text == 'dl') ...[
-                    TextFormField(controller: _formCtrls['phone'], decoration: const InputDecoration(labelText: 'Phone Number (optional)', border: const OutlineInputBorder())),
+                  if (_typeCtrl.text == 'face') ...[
+                    TextFormField(
+                      controller: _faceAddName,
+                      decoration: const InputDecoration(labelText: 'Suspect Name', border: OutlineInputBorder()),
+                      validator: (v) => v == null || v.trim().isEmpty ? 'Name is required' : null,
+                    ),
                     const SizedBox(height: 16),
-                  ],
-                  if (_typeCtrl.text == 'rc') ...[
-                    TextFormField(controller: _formCtrls['maker'], decoration: const InputDecoration(labelText: 'Maker Class (optional)', border: const OutlineInputBorder())),
+                    Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final ImagePicker picker = ImagePicker();
+                                  final picked = await picker.pickImage(source: ImageSource.camera);
+                                  if (picked != null) {
+                                    setState(() => _faceAddImage = picked);
+                                  }
+                                },
+                                icon: const Icon(Icons.camera_alt),
+                                label: const Text('Take Photo'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final ImagePicker picker = ImagePicker();
+                                  final picked = await picker.pickImage(source: ImageSource.gallery);
+                                  if (picked != null) {
+                                    setState(() => _faceAddImage = picked);
+                                  }
+                                },
+                                icon: const Icon(Icons.photo_library),
+                                label: const Text('From Gallery'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_faceAddImage != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Text('Selected: ${_faceAddImage!.name}'),
+                          ),
+                      ],
+                    ),
+                  ] else ...[
+                    TextFormField(
+                      controller: _formCtrls['number'],
+                      validator: (v) => (v == null || v.trim().isEmpty) ? 'This field is required' : null,
+                      decoration: InputDecoration(labelText: _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number', border: const OutlineInputBorder()),
+                    ),
                     const SizedBox(height: 16),
-                    TextFormField(controller: _formCtrls['vehicle'], decoration: const InputDecoration(labelText: 'Vehicle Class (optional)', border: const OutlineInputBorder())),
+                    TextFormField(controller: _formCtrls['crime'], decoration: const InputDecoration(labelText: 'Reason for Blacklisting (optional)', border: const OutlineInputBorder())),
                     const SizedBox(height: 16),
-                    TextFormField(controller: _formCtrls['wheel'], decoration: const InputDecoration(labelText: 'Wheel Type (optional)', border: const OutlineInputBorder())),
+                    TextFormField(controller: _formCtrls['name'], decoration: InputDecoration(labelText: _typeCtrl.text == 'dl' ? 'Name (optional)' : 'Owner Name (optional)', border: const OutlineInputBorder())),
                     const SizedBox(height: 16),
+                    if (_typeCtrl.text == 'dl') ...[
+                      TextFormField(controller: _formCtrls['phone'], decoration: const InputDecoration(labelText: 'Phone Number (optional)', border: const OutlineInputBorder())),
+                      const SizedBox(height: 16),
+                    ],
+                    if (_typeCtrl.text == 'rc') ...[
+                      TextFormField(controller: _formCtrls['maker'], decoration: const InputDecoration(labelText: 'Maker Class (optional)', border: const OutlineInputBorder())),
+                      const SizedBox(height: 16),
+                      TextFormField(controller: _formCtrls['vehicle'], decoration: const InputDecoration(labelText: 'Vehicle Class (optional)', border: const OutlineInputBorder())),
+                      const SizedBox(height: 16),
+                      TextFormField(controller: _formCtrls['wheel'], decoration: const InputDecoration(labelText: 'Wheel Type (optional)', border: const OutlineInputBorder())),
+                      const SizedBox(height: 16),
+                    ],
                   ],
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _addToBlacklist,
+                      onPressed: () {
+                        if (_typeCtrl.text == 'face') {
+                          _addFaceSuspect();
+                        } else {
+                          _addToBlacklist();
+                        }
+                      },
                       style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       child: const Text('Add to Blacklist'),
                     ),
@@ -469,15 +780,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     );
   }
 
-  void _showEntryDetails(Map<String, dynamic> item, {required String type}) {
-    // Helper to safely read possible image fields
+
+  void _showEntryDetails(BuildContext parentContext, Map<String, dynamic> item, {required String type}) {
     String? _getImageUrl(Map<String, dynamic> it) {
       final keys = ['photo', 'image', 'photoUrl', 'image_url', 'photo_url'];
       for (final k in keys) {
         final v = it[k];
         if (v != null && v is String && v.trim().isNotEmpty) return v;
       }
-      // sometimes nested structures exist
       if (it['images'] is List && (it['images'] as List).isNotEmpty) {
         final first = (it['images'] as List).first;
         if (first is String && first.isNotEmpty) return first;
@@ -486,7 +796,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       return null;
     }
 
-    // Helper to show one row
     Widget row(String label, String? value) {
       if (value == null || value.trim().isEmpty) return const SizedBox.shrink();
       return Padding(
@@ -500,15 +809,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
     final imageUrl = _getImageUrl(item);
     showDialog(
-      context: context,
+      context: parentContext,
       builder: (ctx) {
         bool _isRemoving = false;
         return StatefulBuilder(builder: (ctx2, setState2) {
-          // Build display fields depending on type
           final List<Widget> content = [];
-
-          // ID
-          final idVal = (item['_id'] is Map) ? (item['_id']['\$oid'] ?? item['_id'].toString()) : (item['_id']?.toString() ?? '');
+          final idVal = (item['_id'] is Map)
+              ? (item['_id']['\$oid'] ?? item['_id'].toString())
+              : item['_id']?.toString() ?? '';
           if (idVal.isNotEmpty) content.add(row('ID', idVal));
 
           if (type == 'dl') {
@@ -525,7 +833,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             content.add(row('Crime', (item['crime_involved'] ?? item['reason'] ?? '').toString()));
             content.add(row('Verification', (item['verification'] ?? item['Verification'] ?? '').toString()));
           } else {
-            // rc
             content.add(row('RC / Regn', (item['regn_number'] ?? item['rc_number'] ?? item['regnNo'] ?? '').toString()));
             content.add(row('Owner', (item['owner_name'] ?? item['owner'] ?? '').toString()));
             content.add(row('Father', (item['father_name'] ?? '').toString()));
@@ -545,13 +852,12 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             content.add(row('Verification', (item['verification'] ?? item['Verification'] ?? '').toString()));
           }
 
-          // remove empty items
           final filtered = content.where((w) => w is! SizedBox).toList();
 
           return AlertDialog(
             title: Text('${type.toUpperCase()} Details'),
             content: SizedBox(
-              width: double.maxFinite,
+              width: MediaQuery.of(ctx).size.width * 0.8,
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -559,7 +865,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                     if (imageUrl != null) ...[
                       GestureDetector(
                         onTap: () {
-                          // full-screen view
                           Navigator.of(ctx2).push(MaterialPageRoute(builder: (_) {
                             return Scaffold(
                               appBar: AppBar(title: const Text('Photo')),
@@ -570,7 +875,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                         child: Center(
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.network(imageUrl, height: 140, fit: BoxFit.cover, errorBuilder: (c, e, s) => const Icon(Icons.broken_image, size: 64)),
+                            child: Image.network(imageUrl, height: MediaQuery.of(ctx).size.height * 0.2, fit: BoxFit.cover, errorBuilder: (c, e, s) => const Icon(Icons.broken_image, size: 64)),
                           ),
                         ),
                       ),
@@ -583,36 +888,16 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             ),
             actions: [
               TextButton(
-                onPressed: _isRemoving
-                    ? null
-                    : () {
-                  Navigator.of(ctx2).pop();
-                },
+                onPressed: _isRemoving ? null : () => Navigator.of(ctx2).pop(),
                 child: const Text('Close'),
               ),
-              // Only show remove button if user is superadmin
               if (widget.role == 'superadmin')
                 OutlinedButton.icon(
                   icon: _isRemoving
-                      ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.red, // red spinner instead of white
-                    ),
-                  )
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red))
                       : const Icon(Icons.check, color: Colors.red),
-                  label: const Text(
-                    'Remove from blacklist',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.red, width: 1.5), // red border
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
+                  label: const Text('Remove from blacklist', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.red, width: 1.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   onPressed: _isRemoving
                       ? null
                       : () async {
@@ -620,18 +905,11 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       context: ctx2,
                       builder: (c) => AlertDialog(
                         title: const Text('Confirm Remove'),
-                        content: Text(
-                            'Mark this ${type.toUpperCase()} as valid (remove from blacklist)?'),
+                        content: Text('Mark this ${type.toUpperCase()} as valid (remove from blacklist)?'),
                         actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(c).pop(false),
-                            child: const Text('Cancel'),
-                          ),
+                          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
                           OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Colors.red, width: 1.5),
-                              foregroundColor: Colors.red,
-                            ),
+                            style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.red, width: 1.5), foregroundColor: Colors.red),
                             onPressed: () => Navigator.of(c).pop(true),
                             child: const Text('Confirm'),
                           ),
@@ -642,7 +920,64 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                     setState2(() => _isRemoving = true);
                     final ok = await _markValid(type, idVal);
                     setState2(() => _isRemoving = false);
-                    if (ok) Navigator.of(ctx2).pop(); // close details dialog after success
+                    if (ok) Navigator.of(ctx2).pop();
+                  },
+                ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  void _showSuspectDetails(BuildContext parentContext, String name, List<dynamic> imageUrls) {
+    showDialog(
+      context: parentContext,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx2, setState2) {
+          return AlertDialog(
+            title: Text('Suspect: $name'),
+            content: SizedBox(
+              width: MediaQuery.of(ctx).size.width * 0.8,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: imageUrls.isNotEmpty
+                            ? Image.network(
+                          _convertGsUrlToHttp(imageUrls.first)!,
+                          height: MediaQuery.of(ctx).size.height * 0.25,
+                          fit: BoxFit.cover,
+                          errorBuilder: (c, e, s) => const Icon(Icons.broken_image, size: 100),
+                        )
+                            : const Icon(Icons.person, size: 100),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Name: $name', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    const Text('Photos in database:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ...imageUrls.map((url) => Text('- ${url.split('/').last}')),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx2).pop(), child: const Text('Close')),
+              if (widget.role == 'superadmin')
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.delete_forever, color: Colors.red),
+                  label: const Text('Remove suspect', style: TextStyle(color: Colors.red)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.red, width: 1.5),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () async {
+                    await _deleteFaceSuspect(name);
+                    Navigator.of(ctx2).pop();
                   },
                 ),
             ],
@@ -655,88 +990,97 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
   @override
   Widget build(BuildContext context) {
-    // Choose the search controller for the currently active tab
-    final TextEditingController activeSearchController = _tabController.index == 0 ? _dlSearchCtrl : _rcSearchCtrl;
+    final TextEditingController activeSearchController = _tabController.index == 0
+        ? _dlSearchCtrl
+        : _tabController.index == 1
+        ? _rcSearchCtrl
+        : _faceSearchCtrl;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Blacklist Management'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () {
-              setState(() {
-                _isSearching = true;
-              });
-            },
-          ),
-        ],
-        // IMPORTANT: keep TabBar visible always; show search field above it when searching.
-        bottom: PreferredSize(
-          preferredSize: Size.fromHeight(_isSearching ? 110.0 : 48.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_isSearching)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                  child: TextField(
-                    controller: activeSearchController,
-                    decoration: InputDecoration(
-                      hintText: _tabController.index == 0 ? 'Search DL number...' : 'Search RC number...',
-                      prefixIcon: const Icon(Icons.search),
-                      // single close icon inside the search bar that closes the search
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          setState(() {
-                            _isSearching = false;
-                            _dlSearchCtrl.clear();
-                            _rcSearchCtrl.clear();
-                            _fetchDLs(page: 1);
-                            _fetchRCs(page: 1);
-                          });
-                        },
-                        tooltip: 'Close search',
-                      ),
-                      border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(30))),
-                      filled: true,
-                      fillColor: Colors.grey[200],
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0.0, horizontal: 16.0),
-                    ),
-                    onSubmitted: (_) {
-                      if (_tabController.index == 0) _fetchDLs(page: 1);
-                      else _fetchRCs(page: 1);
-                    },
-                  ),
-                ),
-              // TabBar remains visible and interactive even when searching
-              TabBar(
-                controller: _tabController,
-                tabs: [
-                  Tab(text: 'DL ($_dlTotal)'),
-                  Tab(text: 'RC ($_rcTotal)'),
-                ],
-                labelStyle: const TextStyle(fontWeight: FontWeight.bold),
-                indicatorWeight: 3.0,
-              ),
-            ],
-          ),
-        ),
-      ),
-      floatingActionButton: widget.role == 'superadmin' // <-- Role check to show/hide button
-          ? FloatingActionButton(
-        onPressed: _showAddBottomSheet,
-        child: const Icon(Icons.add),
-      )
-          : null, // Hide FAB for other roles
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _buildListContent(_dlList, 'dl', _errorDL, _loadingDL, _dlScroll),
-          _buildListContent(_rcList, 'rc', _errorRC, _loadingRC, _rcScroll),
-        ],
-      ),
+        appBar: AppBar(
+    title: const Text('Blacklist Management'),
+    actions: [
+    IconButton(
+    icon: const Icon(Icons.search),
+    onPressed: () {
+    setState(() {
+    _isSearching = true;
+    });
+    },
+    ),
+    ],
+    bottom: PreferredSize(
+    preferredSize: Size.fromHeight(_isSearching ? 110.0 : 48.0),
+    child: Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+    if (_isSearching)
+    Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+    child: TextField(
+    controller: activeSearchController,
+    decoration: InputDecoration(
+    hintText: _tabController.index == 0
+    ? 'Search DL number...'
+        : _tabController.index == 1
+    ? 'Search RC number...'
+        : 'Search suspect name...',
+    prefixIcon: const Icon(Icons.search),
+    suffixIcon: IconButton(
+    icon: const Icon(Icons.close),
+    onPressed: () {
+    setState(() {
+    _isSearching = false;
+    _dlSearchCtrl.clear();
+    _rcSearchCtrl.clear();
+    _faceSearchCtrl.clear();
+    _fetchDLs(page: 1);
+    _fetchRCs(page: 1);
+    _fetchFaces();
+    });
+    },
+    tooltip: 'Close search',
+    ),
+    border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(30))),
+    filled: true,
+    fillColor: Colors.grey[200],
+    contentPadding: const EdgeInsets.symmetric(vertical: 0.0, horizontal: 16.0),
+    ),
+    onSubmitted: (_) {
+    if (_tabController.index == 0) _fetchDLs(page: 1);
+    else if (_tabController.index == 1) _fetchRCs(page: 1);
+    else _fetchFaces();
+    },
+    ),
+    ),
+    TabBar(
+    controller: _tabController,
+    tabs: [
+    Tab(text: 'DL ($_dlTotal)'),
+    Tab(text: 'RC ($_rcTotal)'),
+    Tab(text: 'Face ($_faceTotal)'),
+    ],
+    labelStyle: const TextStyle(fontWeight: FontWeight.bold),
+    indicatorWeight: 3.0,
+    ),
+    ],
+    ),
+    ),
+    ),
+    floatingActionButton: widget.role == 'superadmin'
+    ? FloatingActionButton(
+    onPressed: _showAddBottomSheet,
+    child: const Icon(Icons.add),
+    )
+        : null,
+    body: TabBarView(
+    controller: _tabController,
+    children: [
+    _buildListContent(_dlList, 'dl', _errorDL, _loadingDL, _dlScroll),
+    _buildListContent(_rcList, 'rc', _errorRC, _loadingRC, _rcScroll),
+    _buildFaceListContent(_errorFace, _loadingFace, _faceScroll),
+    ],
+    ),
     );
   }
 }

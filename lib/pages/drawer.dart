@@ -82,16 +82,17 @@ class AppDrawer extends StatelessWidget {
         color: _drawerBlue,
         child: Column(
           children: [
-            Container(height: 24, color: _drawerTopBand),
+            Container(height: MediaQuery.of(context).padding.top, color: _drawerTopBand),
             Container(
               color: _drawerBlue,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-              child: Stack(
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Column(
+              child: SafeArea(
+                bottom: false,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           CircleAvatar(
@@ -122,13 +123,9 @@ class AppDrawer extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const Expanded(child: SizedBox()),
-                    ],
-                  ),
-                  Positioned(
-                    top: 6,
-                    right: 8,
-                    child: Container(
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: _drawerTopBand.withOpacity(0.12),
@@ -159,8 +156,8 @@ class AppDrawer extends StatelessWidget {
                         ],
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             const Divider(height: 20, color: Colors.white24, indent: 16, endIndent: 16),
