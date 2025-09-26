@@ -10,6 +10,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import 'package:http_parser/http_parser.dart';
 
 import 'verification.dart'; // <- uses verifyDriverAndShowDialog()
 
@@ -27,7 +28,8 @@ class _HomePageContentState extends State<HomePageContent> {
 
   // OCR model endpoints (use the exact working paths)
   final String _dlOcrUrl = 'https://dl-extractor-service-777302308889.us-central1.run.app';
-  final String _rcOcrUrl = 'https://anpr-service-498410737975.us-central1.run.app/recognize_plate/';
+  // NEW RC API endpoint (as provided)
+  final String _rcOcrUrl = 'https://anpr-service-980624091991.asia-south1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
   final String _dlOcrFieldName = 'image_file';
@@ -58,11 +60,6 @@ class _HomePageContentState extends State<HomePageContent> {
   XFile? _lastDriverXFile;
   PlatformFile? _lastDriverPFile;
 
-  // New state for RC alternatives
-  String? _rcOriginalPlate;
-  List<String> _rcPlateAlternatives = [];
-  int _currentRcAlternativeIndex = 0;
-
   // Loading / extracting states
   bool _isVerifying = false;
   bool _dlExtracting = false;
@@ -86,49 +83,77 @@ class _HomePageContentState extends State<HomePageContent> {
     return false;
   }
 
-  // Cycles through the original plate and its alternatives
-  void _cycleRcAlternatives() {
-    if (_rcPlateAlternatives.isEmpty) {
-      return;
-    }
-
-    setState(() {
-      _currentRcAlternativeIndex++;
-      if (_currentRcAlternativeIndex > _rcPlateAlternatives.length) {
-        _currentRcAlternativeIndex = 0;
-      }
-
-      if (_currentRcAlternativeIndex == 0) {
-        _rcController.text = _rcOriginalPlate ?? '';
-      } else {
-        _rcController.text = _rcPlateAlternatives[_currentRcAlternativeIndex - 1];
-      }
-    });
+  // ----------------- Helpers: create MultipartFile ---------------------
+  // Determine media type from filename extension; return null if unknown/non-image
+  MediaType? _mediaTypeForFilename(String filename) {
+    final ext = p.extension(filename).toLowerCase();
+    if (ext == '.jpg' || ext == '.jpeg') return MediaType('image', 'jpeg');
+    if (ext == '.png') return MediaType('image', 'png');
+    if (ext == '.webp') return MediaType('image', 'webp');
+    if (ext == '.bmp') return MediaType('image', 'bmp');
+    if (ext == '.gif') return MediaType('image', 'gif');
+    // Add other image types if needed
+    return null;
   }
 
-  // ----------------- Helpers: create MultipartFile ---------------------
+  bool _isImageFilename(String filename) => _mediaTypeForFilename(filename) != null;
+
   Future<http.MultipartFile?> _makeMultipartFromPicked({
     required String fieldName,
     XFile? xfile,
     PlatformFile? pfile,
   }) async {
     try {
+      String? filename;
       if (!kIsWeb && xfile != null && xfile.path.isNotEmpty) {
-        final filename = p.basename(xfile.path);
-        return await http.MultipartFile.fromPath(fieldName, xfile.path, filename: filename);
+        filename = p.basename(xfile.path);
+        final mediaType = _mediaTypeForFilename(filename);
+        if (mediaType != null) {
+          return await http.MultipartFile.fromPath(
+            fieldName,
+            xfile.path,
+            filename: filename,
+            contentType: mediaType,
+          );
+        } else {
+          // if unknown extension, still try to send (server might accept), but prefer bytes fallback
+          final bytes = await xfile.readAsBytes();
+          final fallbackName = xfile.name.isNotEmpty ? xfile.name : filename;
+          final fallbackMedia = _mediaTypeForFilename(fallbackName ?? '');
+          if (fallbackMedia != null) {
+            return http.MultipartFile.fromBytes(fieldName, bytes, filename: fallbackName, contentType: fallbackMedia);
+          } else {
+            // unknown/unsupported: return null so caller can skip quickly
+            return null;
+          }
+        }
       }
 
       if (pfile != null) {
-        if (pfile.bytes != null) {
-          return http.MultipartFile.fromBytes(fieldName, pfile.bytes!, filename: pfile.name);
-        } else if (pfile.path != null && pfile.path!.isNotEmpty) {
-          return await http.MultipartFile.fromPath(fieldName, pfile.path!, filename: pfile.name);
+        filename = pfile.name;
+        final mediaType = _mediaTypeForFilename(filename);
+        if (mediaType != null) {
+          if (pfile.bytes != null) {
+            return http.MultipartFile.fromBytes(fieldName, pfile.bytes!, filename: filename, contentType: mediaType);
+          } else if (pfile.path != null && pfile.path!.isNotEmpty) {
+            return await http.MultipartFile.fromPath(fieldName, pfile.path!, filename: filename, contentType: mediaType);
+          }
+        } else {
+          // not an image (e.g., pdf). Return null quickly.
+          return null;
         }
       }
 
       if (xfile != null) {
+        // fallback reading bytes for web or if path wasn't available earlier
         final bytes = await xfile.readAsBytes();
-        return http.MultipartFile.fromBytes(fieldName, bytes, filename: xfile.name);
+        final fallbackName = xfile.name;
+        final mediaType = _mediaTypeForFilename(fallbackName);
+        if (mediaType != null) {
+          return http.MultipartFile.fromBytes(fieldName, bytes, filename: fallbackName, contentType: mediaType);
+        } else {
+          return null;
+        }
       }
     } catch (e) {
       debugPrint('[_makeMultipartFromPicked] error: $e');
@@ -166,12 +191,30 @@ class _HomePageContentState extends State<HomePageContent> {
 
       final Uri uri = Uri.parse(effectiveUrl);
 
+      // QUICK CHECK: if RC endpoint, ensure chosen file is an image (avoid repeated 400s)
+      String? chosenName;
+      if (_lastRcPFile != null || _lastRcXFile != null || _lastDlPFile != null || _lastDlXFile != null) {
+        // determine for current call which file is being used (prioritize xfile/pfile args)
+        if (xfile != null) chosenName = xfile.name.isNotEmpty ? xfile.name : p.basename(xfile.path);
+        else if (pfile != null) chosenName = pfile.name;
+      }
+
+      if (!isDlModel) {
+        // RC endpoint requires an image — if filename extension isn't an image, bail fast
+        if (chosenName != null && !_isImageFilename(chosenName)) {
+          controller.text = '';
+          _showErrorSnackBar('Selected file is not a supported image. Please choose JPG/PNG for number plate detection.');
+          setExtractingFalse();
+          return;
+        }
+      }
+
       bool success = false;
 
       for (final fieldName in fieldCandidates) {
         final mp = await _makeMultipartFromPicked(fieldName: fieldName, xfile: xfile, pfile: pfile);
         if (mp == null) {
-          debugPrint('Could not build multipart for field "$fieldName"');
+          debugPrint('Could not build multipart for field "$fieldName" (likely unsupported file type or missing bytes)');
           continue;
         }
 
@@ -194,7 +237,6 @@ class _HomePageContentState extends State<HomePageContent> {
           final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
 
           String? extractedValue;
-          List<String> alternatives = [];
 
           if (isDlModel) {
             // 1) prefer dl_numbers[0]
@@ -236,16 +278,31 @@ class _HomePageContentState extends State<HomePageContent> {
               }
             }
           } else {
-            // RC model
-            if (body != null && body['plate_number'] != null && (body['plate_number'] as String).trim().isNotEmpty) {
-              extractedValue = (body['plate_number'] as String).trim();
-              if (body['alternatives'] is List && (body['alternatives'] as List).isNotEmpty) {
-                alternatives.addAll(body['alternatives'].cast<String>());
+            // -------- RC model (NEW) --------
+            // New API returns:
+            // {
+            //   "detected_plates": [
+            //     { "plate_text": "...", "confidence": "0.99", ... }
+            //   ]
+            // }
+            //
+            // Per new behaviour: the array is ordered by confidence descending.
+            // We ALWAYS consider position 0 only.
+            if (body != null && body['detected_plates'] is List && (body['detected_plates'] as List).isNotEmpty) {
+              final firstPlate = (body['detected_plates'] as List)[0];
+              if (firstPlate is Map) {
+                final plateTextRaw = (firstPlate['plate_text'] ?? '').toString().trim();
+                if (plateTextRaw.isNotEmpty) {
+                  extractedValue = plateTextRaw;
+                }
               }
-            } else if (body != null && body['extracted_text'] != null) {
+            }
+
+            // Defensive legacy fallbacks (rare)
+            if (extractedValue == null && body != null && body['extracted_text'] != null) {
               final t = (body['extracted_text'] as String).trim();
               if (t.isNotEmpty) extractedValue = t;
-            } else if (body != null && body['raw_text'] != null) {
+            } else if (extractedValue == null && body != null && body['raw_text'] != null) {
               final raw = (body['raw_text'] as String).toUpperCase();
               final reg = RegExp(r'([A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,2}\s*\d{3,4})', caseSensitive: false);
               final match = reg.firstMatch(raw);
@@ -254,13 +311,6 @@ class _HomePageContentState extends State<HomePageContent> {
           }
 
           if (extractedValue != null && extractedValue.isNotEmpty) {
-            if (!isDlModel) {
-              setState(() {
-                _rcOriginalPlate = extractedValue;
-                _rcPlateAlternatives = alternatives;
-                _currentRcAlternativeIndex = 0;
-              });
-            }
             controller.text = extractedValue;
             if (body != null && body['filename'] != null) {
               setFileName(body['filename'] as String);
@@ -431,6 +481,26 @@ class _HomePageContentState extends State<HomePageContent> {
           );
         }
       },
+    );
+  }
+
+  // Re-run RC extraction by re-sending the last-picked RC image to the server.
+  Future<void> _refreshRcExtraction() async {
+    if (_lastRcXFile == null && _lastRcPFile == null) {
+      _showInfoSnackBar('No vehicle image selected to refresh.');
+      return;
+    }
+
+    await _uploadForOcrAndFill(
+      uploadUrl: _rcOcrUrl,
+      primaryFieldName: _rcOcrFieldName,
+      isDlModel: false,
+      xfile: _lastRcXFile,
+      pfile: _lastRcPFile,
+      setFileName: (s) => setState(() => _rcImageName = s),
+      controller: _rcController,
+      setExtractingTrue: () => setState(() => _rcExtracting = true),
+      setExtractingFalse: () => setState(() => _rcExtracting = false),
     );
   }
 
@@ -797,8 +867,9 @@ class _HomePageContentState extends State<HomePageContent> {
                       hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
                       prefixIcon: Icons.directions_car,
                       enabled: !_rcExtracting,
-                      showAlternateButton: _rcPlateAlternatives.isNotEmpty,
-                      onAlternatePressed: _cycleRcAlternatives,
+                      // Show refresh button when an RC image is present; pressing it will re-call the RC API.
+                      showAlternateButton: (_lastRcXFile != null || _lastRcPFile != null),
+                      onAlternatePressed: _refreshRcExtraction,
                     ),
 
                     const SizedBox(height: 24),
