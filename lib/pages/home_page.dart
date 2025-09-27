@@ -176,7 +176,7 @@ class _HomePageState extends State<HomePage> {
             backgroundColor: _headerBlue,
             foregroundColor: Colors.white,
             title: const Text(
-              "DL/RC Verification Portal",
+              "Netra Sarthi",
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
             actions: [

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:ai_tollgate_survaillance_system/pages/auth.dart';
+import 'pages/auth.dart';
 
 void main() {
   runApp(const MyApp());

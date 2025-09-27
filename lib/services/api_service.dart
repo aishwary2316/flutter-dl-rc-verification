@@ -444,15 +444,55 @@ class ApiService {
       final headers = <String, String>{'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json'};
       if (faceAuthHeader != null) headers.addAll(faceAuthHeader);
 
+      print('ApiService.deleteSuspectFromFace -> POST $uri person_name=$personName');
       final resp = await http.post(uri, headers: headers, body: {'person_name': personName}).timeout(const Duration(seconds: 20));
+
+      // parse body safely
       final body = _safeJson(resp.body);
+      print('ApiService.deleteSuspectFromFace -> status ${resp.statusCode} bodyParsed=$body');
+
+      // determine "deleted" deterministically
+      bool deleted = false;
+      try {
+        if (body is Map) {
+          final statusStr = (body['status'] ?? body['detail'] ?? body['result'] ?? '').toString().toLowerCase();
+          if (statusStr.contains('deleted')) deleted = true;
+          final dc = body['deleted_count'] ?? body['deleted'];
+          if (dc is num && dc.toInt() > 0) deleted = true;
+        } else if (body is String) {
+          if (body.toLowerCase().contains('deleted')) deleted = true;
+        } else if (body is Map && body.containsKey('raw')) {
+          final raw = body['raw'].toString().toLowerCase();
+          if (raw.contains('deleted')) deleted = true;
+        }
+      } catch (e) {
+        // ignore parsing exceptions, keep deleted=false
+        print('ApiService.deleteSuspectFromFace -> parsing error: $e');
+      }
 
       if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
+        // Return ok:true and explicit deleted flag + useful debug info
+        return {
+          'ok': true,
+          'deleted': deleted,
+          'status': resp.statusCode,
+          'data': body,
+          'raw': resp.body,
+        };
       }
-      return {'ok': false, 'message': body['detail'] ?? body['message'] ?? 'Delete suspect failed (${resp.statusCode})', 'body': body};
+
+      // non-200
+      return {
+        'ok': false,
+        'deleted': false,
+        'message': body is Map ? (body['detail'] ?? body['message'] ?? 'Delete suspect failed (${resp.statusCode})') : 'Delete suspect failed (${resp.statusCode})',
+        'status': resp.statusCode,
+        'body': body,
+        'raw': resp.body,
+      };
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      print('ApiService.deleteSuspectFromFace -> exception: $e');
+      return {'ok': false, 'deleted': false, 'message': 'Network error: $e'};
     }
   }
 }

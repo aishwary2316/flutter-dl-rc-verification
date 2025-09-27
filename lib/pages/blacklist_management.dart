@@ -135,6 +135,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   /// Fetching functions
   /// -----------------------
   Future<void> _fetchDLs({int page = 1}) async {
+    if (!mounted) return;
     setState(() {
       _loadingDL = true;
       _errorDL = null;
@@ -143,7 +144,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     final q = _dlSearchCtrl.text.trim();
     try {
       final resp = await _api.getBlacklistedDLs(page: page, limit: _limit, search: q);
-      if (resp['ok'] == true) {
+      if (resp is Map && resp['ok'] == true) {
         final body = resp['data'];
         List<Map<String, dynamic>> dataList = [];
         int pageGot = page;
@@ -161,6 +162,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           totalGot = dataList.length;
         }
 
+        if (!mounted) return;
         setState(() {
           if (page == 1) _dlList = dataList;
           else _dlList.addAll(dataList);
@@ -168,16 +170,20 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           _dlPage = pageGot;
         });
       } else {
-        setState(() => _errorDL = resp['message'] ?? 'Failed to load DL blacklist');
+        if (!mounted) return;
+        setState(() => _errorDL = (resp is Map) ? resp['message'] ?? 'Failed to load DL blacklist' : 'Failed to load DL blacklist');
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _errorDL = 'Error loading DL blacklist: $e');
     } finally {
+      if (!mounted) return;
       setState(() => _loadingDL = false);
     }
   }
 
   Future<void> _fetchRCs({int page = 1}) async {
+    if (!mounted) return;
     setState(() {
       _loadingRC = true;
       _errorRC = null;
@@ -186,7 +192,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     final q = _rcSearchCtrl.text.trim();
     try {
       final resp = await _api.getBlacklistedRCs(page: page, limit: _limit, search: q);
-      if (resp['ok'] == true) {
+      if (resp is Map && resp['ok'] == true) {
         final body = resp['data'];
         List<Map<String, dynamic>> dataList = [];
         int pageGot = page;
@@ -204,6 +210,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           totalGot = dataList.length;
         }
 
+        if (!mounted) return;
         setState(() {
           if (page == 1) _rcList = dataList;
           else _rcList.addAll(dataList);
@@ -211,16 +218,20 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           _rcPage = pageGot;
         });
       } else {
-        setState(() => _errorRC = resp['message'] ?? 'Failed to load RC blacklist');
+        if (!mounted) return;
+        setState(() => _errorRC = (resp is Map) ? resp['message'] ?? 'Failed to load RC blacklist' : 'Failed to load RC blacklist');
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _errorRC = 'Error loading RC blacklist: $e');
     } finally {
+      if (!mounted) return;
       setState(() => _loadingRC = false);
     }
   }
 
   Future<void> _fetchFaces() async {
+    if (!mounted) return;
     setState(() {
       _loadingFace = true;
       _errorFace = null;
@@ -228,7 +239,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
     try {
       final resp = await _api.listSuspects();
-      if (resp['ok'] == true) {
+      if (resp is Map && resp['ok'] == true) {
         final body = resp['data'];
         final Map<String, List<String>> faceMap = {};
 
@@ -269,16 +280,20 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           for (var entry in faceMap.entries)
             if (entry.key.toLowerCase().contains(q)) entry.key: entry.value
         };
+        if (!mounted) return;
         setState(() {
           _faceMap = filteredMap;
           _faceTotal = _faceMap.length;
         });
       } else {
-        setState(() => _errorFace = resp['message'] ?? 'Failed to load face suspects');
+        if (!mounted) return;
+        setState(() => _errorFace = (resp is Map) ? resp['message'] ?? 'Failed to load face suspects' : 'Failed to load face suspects');
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _errorFace = 'Error loading face suspects: $e');
     } finally {
+      if (!mounted) return;
       setState(() => _loadingFace = false);
     }
   }
@@ -312,6 +327,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       },
     }..removeWhere((k, v) => v == null);
 
+    if (!mounted) return;
     setState(() {
       if (type == 'dl') _loadingDL = true;
       else _loadingRC = true;
@@ -319,22 +335,21 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
     try {
       final resp = await _api.addToBlacklist(payload);
-      if (resp['ok'] == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added to blacklist successfully!'), backgroundColor: Colors.green));
-        }
+      if (!mounted) return;
+      if (resp is Map && resp['ok'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added to blacklist successfully!'), backgroundColor: Colors.green));
         if (type == 'dl') await _fetchDLs(page: 1);
         else await _fetchRCs(page: 1);
         Navigator.of(context).pop();
       } else {
-        if (mounted) {
-          final msg = resp['message'] ?? 'Failed to add';
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-        }
+        final msg = (resp is Map) ? resp['message'] ?? 'Failed to add' : 'Failed to add';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
     } finally {
+      if (!mounted) return;
       setState(() {
         _loadingDL = false;
         _loadingRC = false;
@@ -342,73 +357,285 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     }
   }
 
+  /// -----------------------
+  /// Response parsing helpers
+  /// -----------------------
+
+  // Recursively search maps/lists for any indicator of deletion:
+  // - status contains 'deleted'
+  // - any numeric 'deleted_count' or 'deleted' > 0
+  bool _mapIndicatesDeleted(dynamic obj) {
+    try {
+      if (obj == null) return false;
+      if (obj is Map) {
+        for (final k in obj.keys) {
+          final v = obj[k];
+          if (v is String) {
+            if (v.toLowerCase().contains('deleted')) return true;
+          } else if (v is num) {
+            if (k.toString().toLowerCase().contains('deleted') && v.toInt() > 0) return true;
+            if (v.toInt() > 0 && k.toString().toLowerCase().contains('count')) return true;
+          } else if (v is Map || v is List) {
+            if (_mapIndicatesDeleted(v)) return true;
+          }
+        }
+        // also check common keys directly
+        final status = (obj['status'] ?? obj['result'] ?? '').toString().toLowerCase();
+        if (status.contains('deleted')) return true;
+        final dc = obj['deleted_count'] ?? obj['deleted'] ?? obj['deletedCount'];
+        if (dc is num && dc.toInt() > 0) return true;
+        if (obj['ok'] == true) return true;
+        return false;
+      } else if (obj is List) {
+        for (final el in obj) {
+          if (_mapIndicatesDeleted(el)) return true;
+        }
+        return false;
+      } else if (obj is String) {
+        return obj.toLowerCase().contains('deleted');
+      } else {
+        // other primitive
+        return false;
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Helper: Inspect a face-api list_suspects response body and return true if person exists
+  bool _isPersonPresentInFaceListResponse(dynamic body, String personName) {
+    try {
+      if (body == null) return false;
+      // If body is a map where keys are person names
+      if (body is Map) {
+        // Direct key
+        if (body.containsKey(personName)) return true;
+        // Known faces list: check gs:// or http urls for path containing personName
+        for (final entryKey in body.keys) {
+          final val = body[entryKey];
+          if (val is List) {
+            for (final item in val) {
+              if (item is String) {
+                // if url contains '/<personName>/' or path segment equals personName
+                final lower = item.toLowerCase();
+                if (lower.contains('/${personName.toLowerCase()}/') ||
+                    lower.endsWith('/${personName.toLowerCase()}') ||
+                    lower.contains(personName.toLowerCase())) {
+                  // crude but effective check (we do more refined parsing below)
+                  // try parse path segments if it's a valid URI
+                  try {
+                    final uri = Uri.parse(item);
+                    if (uri.pathSegments.length >= 2) {
+                      final candidate = uri.pathSegments[uri.pathSegments.length - 2];
+                      if (candidate.toLowerCase() == personName.toLowerCase()) return true;
+                    }
+                  } catch (_) {
+                    // ignore parse errors, fallback to substring check
+                    return true;
+                  }
+                }
+              }
+            }
+          } else if (entryKey.toString().toLowerCase() == personName.toLowerCase()) {
+            return true;
+          }
+        }
+      }
+      // If body is a list (less likely) check each element
+      if (body is List) {
+        for (final el in body) {
+          if (el is String && el.toLowerCase().contains(personName.toLowerCase())) return true;
+          if (el is Map && _isPersonPresentInFaceListResponse(el, personName)) return true;
+        }
+      }
+      // Fallback: string search
+      final s = body.toString().toLowerCase();
+      if (s.contains(personName.toLowerCase())) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Deterministic delete helper with timeout-handling + verification
+  Future<bool> _deleteFaceSuspectApi(String personName) async {
+    try {
+      final dynamic raw = await _api.deleteSuspectFromFace(personName);
+      debugPrint('deleteSuspectFromFace raw => $raw');
+
+      if (raw == null) return false;
+
+      // Preferred: ApiService returns Map with ok & deleted.
+      if (raw is Map) {
+        // If ApiService says ok:true
+        if (raw['ok'] == true) {
+          if (raw.containsKey('deleted')) {
+            return raw['deleted'] == true;
+          }
+          // fallback: check nested data heuristics
+          if (raw.containsKey('data') && _mapIndicatesDeleted(raw['data'])) return true;
+          if (_mapIndicatesDeleted(raw)) return true;
+          // server returned ok but no deleted indicator — assume success (server processed)
+          return true;
+        } else {
+          // not ok -> could be timeout or network error (which sometimes still processed on server)
+          final msg = (raw['message'] ?? '').toString().toLowerCase();
+
+          // If it looks like a timeout/network failure, probe the face API to confirm whether person still exists.
+          final bool isTimeoutLike = msg.contains('timeout') || msg.contains('timed out') || msg.contains('timeoutexception') || msg.contains('network error');
+          if (isTimeoutLike) {
+            // try verifying by polling listSuspects a few times (short backoff)
+            for (int attempt = 0; attempt < 3; attempt++) {
+              // small delay before verifying (first try immediate-ish)
+              await Future.delayed(Duration(milliseconds: attempt == 0 ? 500 : 1000 * (attempt + 1)));
+              try {
+                final listResp = await _api.listSuspects();
+                debugPrint('deleteSuspectFromFace -> verification attempt #$attempt listResp: $listResp');
+                if (listResp is Map && listResp['ok'] == true) {
+                  final body = listResp['data'];
+                  final present = _isPersonPresentInFaceListResponse(body, personName);
+                  if (!present) {
+                    // person not present -> treat as success
+                    return true;
+                  }
+                  // if present, continue attempts (maybe deletion completed a bit later)
+                } else {
+                  // if listResp not ok, keep trying
+                }
+              } catch (e) {
+                debugPrint('Verification call failed: $e');
+              }
+            }
+          }
+
+          // fallback heuristics: maybe the response body indicates deletion
+          if (raw.containsKey('data') && _mapIndicatesDeleted(raw['data'])) return true;
+          if (_mapIndicatesDeleted(raw)) return true;
+          // otherwise consider it failed
+          return false;
+        }
+      }
+
+      // If it's an http.Response (older code path) - inspect
+      if (raw is http.Response) {
+        try {
+          final bodyDecoded = jsonDecode(raw.body);
+          if (_mapIndicatesDeleted(bodyDecoded)) return true;
+        } catch (_) {
+          if (raw.body.toLowerCase().contains('deleted')) return true;
+        }
+        // If HTTP 200 but no 'deleted' text, still attempt verification (server may have processed)
+        if (raw.statusCode == 200) {
+          // verification probe
+          final listResp = await _api.listSuspects();
+          if (listResp is Map && listResp['ok'] == true) {
+            final body = listResp['data'];
+            final present = _isPersonPresentInFaceListResponse(body, personName);
+            if (!present) return true;
+          }
+        }
+        return false;
+      }
+
+      // If string: try to parse
+      if (raw is String) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (_mapIndicatesDeleted(decoded)) return true;
+        } catch (_) {
+          if (raw.toLowerCase().contains('deleted')) return true;
+        }
+        // fallback: verify list
+        final listResp = await _api.listSuspects();
+        if (listResp is Map && listResp['ok'] == true) {
+          final body = listResp['data'];
+          final present = _isPersonPresentInFaceListResponse(body, personName);
+          if (!present) return true;
+        }
+        return false;
+      }
+
+      // Other types: stringify and check
+      final s = raw.toString();
+      if (s.toLowerCase().contains('deleted')) return true;
+
+      // As final fallback, probe list endpoint
+      final listResp = await _api.listSuspects();
+      if (listResp is Map && listResp['ok'] == true) {
+        final body = listResp['data'];
+        final present = _isPersonPresentInFaceListResponse(body, personName);
+        if (!present) return true;
+      }
+
+      return false;
+    } catch (e) {
+      debugPrint('Exception in _deleteFaceSuspectApi: $e');
+      // As last-resort, probe list endpoint to see if person disappeared despite exception
+      try {
+        final listResp = await _api.listSuspects();
+        if (listResp is Map && listResp['ok'] == true) {
+          final body = listResp['data'];
+          final present = _isPersonPresentInFaceListResponse(body, personName);
+          if (!present) return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+  }
+
   Future<void> _addFaceSuspect() async {
     if (!_faceAddFormKey.currentState!.validate()) return;
     if (_faceAddImage == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select an image'), backgroundColor: Colors.red));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select an image'), backgroundColor: Colors.red));
       return;
     }
 
-    Navigator.of(context).pop();
-    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+    // Close the bottomsheet/modal that invoked this (if present)
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+
+    // show a blocking loading dialog (use rootNavigator to ensure we pop the right one)
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
 
     try {
       final resp = await _api.addSuspectFromFace(
         personName: _faceAddName.text.trim(),
         imagePath: _faceAddImage!.path,
       );
-      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
 
-      if (resp['ok'] == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect added successfully!'), backgroundColor: Colors.green));
-        }
-        _fetchFaces();
+      // Dismiss loader (always attempt to pop the root navigator if possible)
+      try {
+        if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+      } catch (_) {}
+
+      if (!mounted) return;
+      if (resp is Map && resp['ok'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect added successfully!'), backgroundColor: Colors.green));
+        await _fetchFaces();
       } else {
-        if (mounted) {
-          final msg = resp['message'] ?? 'Failed to add face suspect';
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-        }
+        final msg = (resp is Map) ? resp['message'] ?? 'Failed to add face suspect' : 'Failed to add face suspect';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
       }
     } catch (e) {
-      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      // Ensure loader removed
+      try {
+        if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+      } catch (_) {}
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
-    }
-  }
-
-  Future<void> _deleteFaceSuspect(String personName) async {
-    final confirmed = await _showConfirmDialog('Are you sure you want to delete $personName from the suspect list?');
-    if (confirmed != true) return;
-
-    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-
-    try {
-      final resp = await _api.deleteSuspectFromFace(personName);
-      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-
-      if (resp['ok'] == true) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect deleted successfully!'), backgroundColor: Colors.green));
-        }
-        _fetchFaces();
-      } else {
-        if (mounted) {
-          final msg = resp['message'] ?? 'Failed to delete suspect';
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
-        }
-      }
-    } catch (e) {
-      if (mounted) Navigator.of(context).pop();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red));
     }
   }
 
   Future<bool> _markValid(String type, String id) async {
     try {
       final resp = await _api.markBlacklistValid(type: type, id: id);
-      if (resp['ok'] == true) {
+      if (resp is Map && resp['ok'] == true) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entry marked valid (removed)'), backgroundColor: Colors.green));
         if (type == 'dl') {
           await _fetchDLs(page: 1);
@@ -417,7 +644,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         }
         return true;
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(resp['message'] ?? 'Failed to mark valid'), backgroundColor: Colors.red));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text((resp is Map) ? resp['message'] ?? 'Failed to mark valid' : 'Failed to mark valid'), backgroundColor: Colors.red));
         return false;
       }
     } catch (e) {
@@ -471,7 +698,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           final status = (entry['verification'] ?? entry['Verification'] ?? entry['status'] ?? '').toString();
 
           return Dismissible(
-            key: ValueKey(id + '-$i'),
+            key: ValueKey(id),
             direction: dismissDirection,
             background: Container(
               alignment: Alignment.centerRight,
@@ -482,8 +709,44 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             confirmDismiss: (direction) async {
               final confirmed = await _showConfirmDialog('Mark this ${type.toUpperCase()} as valid (remove from blacklist)?');
               if (confirmed != true) return false;
-              final ok = await _markValid(type, id.toString());
+
+              // show blocking loading while API call happens
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                useRootNavigator: true,
+                builder: (_) => const Center(child: CircularProgressIndicator()),
+              );
+
+              bool ok = false;
+              try {
+                ok = await _markValid(type, id.toString());
+              } catch (e) {
+                ok = false;
+              } finally {
+                // always attempt to close the loading dialog in root navigator
+                try {
+                  if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+                } catch (_) {}
+              }
+
               return ok;
+            },
+            onDismissed: (direction) {
+              // remove the entry from the local list immediately to keep tree consistent
+              if (mounted) {
+                setState(() {
+                  list.removeWhere((e) {
+                    final eid = (e['_id'] is Map) ? (e['_id']['\$oid'] ?? e['_id'].toString()) : e['_id']?.toString() ?? '';
+                    return eid == id;
+                  });
+                  if (type == 'dl') {
+                    _dlTotal = _dlList.length;
+                  } else {
+                    _rcTotal = _rcList.length;
+                  }
+                });
+              }
             },
             child: Card(
               margin: const EdgeInsets.symmetric(vertical: 6),
@@ -566,8 +829,44 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             confirmDismiss: (direction) async {
               final confirmed = await _showConfirmDialog('Are you sure you want to delete $personName from the suspect list?');
               if (confirmed != true) return false;
-              await _deleteFaceSuspect(personName);
-              return true;
+
+              // show spinner
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                useRootNavigator: true,
+                builder: (_) => const Center(child: CircularProgressIndicator()),
+              );
+
+              bool success = false;
+              try {
+                success = await _deleteFaceSuspectApi(personName);
+                if (success) {
+                  // refresh so UI shows current server state
+                  await _fetchFaces();
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect deleted successfully!'), backgroundColor: Colors.green));
+                } else {
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete suspect'), backgroundColor: Colors.red));
+                }
+              } catch (e) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                success = false;
+              } finally {
+                // always attempt to close spinner (root navigator)
+                try {
+                  if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+                } catch (_) {}
+              }
+
+              return success;
+            },
+            onDismissed: (direction) {
+              if (mounted) {
+                setState(() {
+                  _faceMap.remove(personName);
+                  _faceTotal = _faceMap.length;
+                });
+              }
             },
             child: Card(
               margin: const EdgeInsets.symmetric(vertical: 6),
@@ -604,7 +903,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     final path = parts.sublist(1).join('/');
     return 'https://storage.googleapis.com/$bucket/$path';
   }
-
 
   Widget _buildSubtitle(Map<String, dynamic> entry, String type) {
     List<Widget> children = [];
@@ -780,7 +1078,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     );
   }
 
-
   void _showEntryDetails(BuildContext parentContext, Map<String, dynamic> item, {required String type}) {
     String? _getImageUrl(Map<String, dynamic> it) {
       final keys = ['photo', 'image', 'photoUrl', 'image_url', 'photo_url'];
@@ -917,10 +1214,27 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       ),
                     );
                     if (confirm != true) return;
-                    setState2(() => _isRemoving = true);
+                    setState(() => _isRemoving = true);
+
+                    // show spinner while marking valid
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      useRootNavigator: true,
+                      builder: (_) => const Center(child: CircularProgressIndicator()),
+                    );
+
                     final ok = await _markValid(type, idVal);
-                    setState2(() => _isRemoving = false);
-                    if (ok) Navigator.of(ctx2).pop();
+
+                    // always try to pop spinner
+                    try {
+                      if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+                    } catch (_) {}
+
+                    setState(() => _isRemoving = false);
+                    if (ok) {
+                      Navigator.of(ctx2).pop();
+                    }
                   },
                 ),
             ],
@@ -976,8 +1290,45 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: () async {
-                    await _deleteFaceSuspect(name);
-                    Navigator.of(ctx2).pop();
+                    final confirmed = await _showConfirmDialog('Are you sure you want to delete $name from the suspect list?');
+                    if (confirmed != true) return;
+
+                    // show loading while deleting
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      useRootNavigator: true,
+                      builder: (_) => const Center(child: CircularProgressIndicator()),
+                    );
+
+                    bool success = false;
+                    try {
+                      success = await _deleteFaceSuspectApi(name);
+
+                      // always attempt to close loader
+                      try {
+                        if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+                      } catch (_) {}
+
+                      if (success && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Suspect deleted successfully!'), backgroundColor: Colors.green));
+                        if (mounted) {
+                          setState(() {
+                            _faceMap.remove(name);
+                            _faceTotal = _faceMap.length;
+                          });
+                        }
+                        Navigator.of(ctx2).pop(); // close details dialog
+                      } else {
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete suspect'), backgroundColor: Colors.red));
+                      }
+                    } catch (e) {
+                      // ensure loader closed
+                      try {
+                        if (Navigator.of(context, rootNavigator: true).canPop()) Navigator.of(context, rootNavigator: true).pop();
+                      } catch (_) {}
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                    }
                   },
                 ),
             ],
@@ -986,7 +1337,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       },
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -997,90 +1347,86 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         : _faceSearchCtrl;
 
     return Scaffold(
-        appBar: AppBar(
-    title: const Text('Blacklist Management'),
-    actions: [
-    IconButton(
-    icon: const Icon(Icons.search),
-    onPressed: () {
-    setState(() {
-    _isSearching = true;
-    });
-    },
-    ),
-    ],
-    bottom: PreferredSize(
-    preferredSize: Size.fromHeight(_isSearching ? 110.0 : 48.0),
-    child: Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-    if (_isSearching)
-    Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-    child: TextField(
-    controller: activeSearchController,
-    decoration: InputDecoration(
-    hintText: _tabController.index == 0
-    ? 'Search DL number...'
-        : _tabController.index == 1
-    ? 'Search RC number...'
-        : 'Search suspect name...',
-    prefixIcon: const Icon(Icons.search),
-    suffixIcon: IconButton(
-    icon: const Icon(Icons.close),
-    onPressed: () {
-    setState(() {
-    _isSearching = false;
-    _dlSearchCtrl.clear();
-    _rcSearchCtrl.clear();
-    _faceSearchCtrl.clear();
-    _fetchDLs(page: 1);
-    _fetchRCs(page: 1);
-    _fetchFaces();
-    });
-    },
-    tooltip: 'Close search',
-    ),
-    border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(30))),
-    filled: true,
-    fillColor: Colors.grey[200],
-    contentPadding: const EdgeInsets.symmetric(vertical: 0.0, horizontal: 16.0),
-    ),
-    onSubmitted: (_) {
-    if (_tabController.index == 0) _fetchDLs(page: 1);
-    else if (_tabController.index == 1) _fetchRCs(page: 1);
-    else _fetchFaces();
-    },
-    ),
-    ),
-    TabBar(
-    controller: _tabController,
-    tabs: [
-    Tab(text: 'DL ($_dlTotal)'),
-    Tab(text: 'RC ($_rcTotal)'),
-    Tab(text: 'Face ($_faceTotal)'),
-    ],
-    labelStyle: const TextStyle(fontWeight: FontWeight.bold),
-    indicatorWeight: 3.0,
-    ),
-    ],
-    ),
-    ),
-    ),
-    floatingActionButton: widget.role == 'superadmin'
-    ? FloatingActionButton(
-    onPressed: _showAddBottomSheet,
-    child: const Icon(Icons.add),
-    )
-        : null,
-    body: TabBarView(
-    controller: _tabController,
-    children: [
-    _buildListContent(_dlList, 'dl', _errorDL, _loadingDL, _dlScroll),
-    _buildListContent(_rcList, 'rc', _errorRC, _loadingRC, _rcScroll),
-    _buildFaceListContent(_errorFace, _loadingFace, _faceScroll),
-    ],
-    ),
+      appBar: AppBar(
+        title: const Text('Blacklist Management'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () {
+              setState(() {
+                _isSearching = true;
+              });
+            },
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(_isSearching ? 110.0 : 48.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_isSearching)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: TextField(
+                    controller: activeSearchController,
+                    decoration: InputDecoration(
+                      hintText: _tabController.index == 0 ? 'Search DL number...' : _tabController.index == 1 ? 'Search RC number...' : 'Search suspect name...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () {
+                          setState(() {
+                            _isSearching = false;
+                            _dlSearchCtrl.clear();
+                            _rcSearchCtrl.clear();
+                            _faceSearchCtrl.clear();
+                            _fetchDLs(page: 1);
+                            _fetchRCs(page: 1);
+                            _fetchFaces();
+                          });
+                        },
+                        tooltip: 'Close search',
+                      ),
+                      border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(30))),
+                      filled: true,
+                      fillColor: Colors.grey[200],
+                      contentPadding: const EdgeInsets.symmetric(vertical: 0.0, horizontal: 16.0),
+                    ),
+                    onSubmitted: (_) {
+                      if (_tabController.index == 0) _fetchDLs(page: 1);
+                      else if (_tabController.index == 1) _fetchRCs(page: 1);
+                      else _fetchFaces();
+                    },
+                  ),
+                ),
+              TabBar(
+                controller: _tabController,
+                tabs: [
+                  Tab(text: 'DL ($_dlTotal)'),
+                  Tab(text: 'RC ($_rcTotal)'),
+                  Tab(text: 'Face ($_faceTotal)'),
+                ],
+                labelStyle: const TextStyle(fontWeight: FontWeight.bold),
+                indicatorWeight: 3.0,
+              ),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: widget.role == 'superadmin'
+          ? FloatingActionButton(
+        onPressed: _showAddBottomSheet,
+        child: const Icon(Icons.add),
+      )
+          : null,
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildListContent(_dlList, 'dl', _errorDL, _loadingDL, _dlScroll),
+          _buildListContent(_rcList, 'rc', _errorRC, _loadingRC, _rcScroll),
+          _buildFaceListContent(_errorFace, _loadingFace, _faceScroll),
+        ],
+      ),
     );
   }
 }
