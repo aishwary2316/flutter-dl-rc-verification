@@ -2,11 +2,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../utils/safe_log.dart';
+import '../utils/safe_error.dart';
 import '../services/api_service.dart';
 import '../utils/validators.dart';
 
@@ -38,7 +41,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
   List<Map<String, dynamic>> _dlList = [];
   List<Map<String, dynamic>> _rcList = [];
-  Map<String, dynamic> _faceMap = {};
+  // Key: unique_id (string), Value: {id, name, image} where image is base64
+  Map<String, Map<String, dynamic>> _faceMap = {};
   int _dlTotal = 0;
   int _rcTotal = 0;
   int _faceTotal = 0;
@@ -54,18 +58,43 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   final TextEditingController _typeCtrl = TextEditingController(text: 'dl');
   final Map<String, TextEditingController> _formCtrls = {
     'number': TextEditingController(),
+    'reason': TextEditingController(),
     'name': TextEditingController(),
     'phone': TextEditingController(),
-    'crime': TextEditingController(),
     'owner': TextEditingController(),
     'maker': TextEditingController(),
     'vehicle': TextEditingController(),
     'wheel': TextEditingController(),
+    'father': TextEditingController(),
+    'address': TextEditingController(),
+    'fuel': TextEditingController(),
+    'body': TextEditingController(),
+    'mfg': TextEditingController(),
+    'chassis': TextEditingController(),
+    'engine': TextEditingController(),
+    'regn_date': TextEditingController(),
+    'valid_upto': TextEditingController(),
+    'tax_paid': TextEditingController(),
+    'crime': TextEditingController(),
   };
 
   final _faceAddFormKey = GlobalKey<FormState>();
   final TextEditingController _faceAddName = TextEditingController();
   XFile? _faceAddImage;
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  XFile? _dlBlacklistImage;
+  XFile? _rcBlacklistImage;
+  List<String> _dlBlacklistCandidates = [];
+  int _dlBlacklistCandidateIndex = 0;
+  bool _dlBlacklistExtracting = false;
+  bool _rcBlacklistExtracting = false;
+  bool _dlBlacklistCancelled = false;
+  bool _rcBlacklistCancelled = false;
+  int _dlBlacklistRequestId = 0;
+  int _rcBlacklistRequestId = 0;
+  bool _submittingBlacklist = false;
 
   late TabController _tabController;
   final ScrollController _dlScroll = ScrollController();
@@ -137,13 +166,394 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   // Helper to get Headers with Token
   Future<Map<String, String>> _getHeaders() async {
     final token = await _api.getToken();
-    return {
+    final headers = <String, String>{
       'Content-Type': 'application/json',
       'accept': 'application/json',
-      'Authorization': 'Bearer $token',
     };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    return headers;
   }
 
+
+  void _showErrorSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red.shade600,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  void _showInfoSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green.shade600,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  // -----------------------
+  // Autofill, validation, and search helpers
+  // -----------------------
+  String _normalizeText(String? value) {
+    return (value ?? '')
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  String _flattenAny(dynamic value) {
+    if (value == null) return '';
+    if (value is String) return value;
+    if (value is num || value is bool) return value.toString();
+    if (value is Map) {
+      return value.values.map(_flattenAny).where((e) => e.trim().isNotEmpty).join(' ');
+    }
+    if (value is List) {
+      return value.map(_flattenAny).where((e) => e.trim().isNotEmpty).join(' ');
+    }
+    return value.toString();
+  }
+
+  List<Map<String, dynamic>> _semanticFilterEntries(
+      List<Map<String, dynamic>> entries,
+      String query,
+      ) {
+    final q = _normalizeText(query);
+    if (q.isEmpty) return entries;
+
+    final tokens = q.split(' ').where((t) => t.trim().length >= 2).toList();
+    if (tokens.isEmpty) return entries;
+
+    int score(Map<String, dynamic> entry) {
+      final blob = _normalizeText(_flattenAny(entry));
+      int s = 0;
+      for (final token in tokens) {
+        if (blob.contains(token)) s += 2;
+      }
+      return s;
+    }
+
+    final filtered = entries
+        .where((entry) {
+      final blob = _normalizeText(_flattenAny(entry));
+      return tokens.every((t) => blob.contains(t));
+    })
+        .toList();
+
+    filtered.sort((a, b) => score(b).compareTo(score(a)));
+    return filtered;
+  }
+
+  String? _safeString(dynamic value) {
+    final s = value?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  String? _deepFindString(dynamic source, List<String> keys) {
+    if (source == null) return null;
+    if (source is Map) {
+      for (final entry in source.entries) {
+        for (final key in keys) {
+          if (entry.key.toString().toLowerCase() == key.toLowerCase()) {
+            final found = _safeString(entry.value);
+            if (found != null) return found;
+          }
+        }
+      }
+      for (final value in source.values) {
+        final nested = _deepFindString(value, keys);
+        if (nested != null) return nested;
+      }
+    } else if (source is List) {
+      for (final value in source) {
+        final nested = _deepFindString(value, keys);
+        if (nested != null) return nested;
+      }
+    }
+    return null;
+  }
+
+  bool _isImageSelectionValid(String pathOrName) {
+    final ext = pathOrName.toLowerCase();
+    return ext.endsWith('.jpg') ||
+        ext.endsWith('.jpeg') ||
+        ext.endsWith('.png') ||
+        ext.endsWith('.webp') ||
+        ext.endsWith('.bmp');
+  }
+
+  Future<bool> _validatePickedImage(XFile picked) async {
+    if (kIsWeb) {
+      return _isImageSelectionValid(picked.name);
+    }
+    final file = File(picked.path);
+    return Validators.isValidImage(file);
+  }
+
+  File? _xFileToFile(XFile? file) {
+    if (kIsWeb || file == null || file.path.isEmpty) return null;
+    return File(file.path);
+  }
+
+  List<String> _extractDlCandidates(dynamic resp) {
+    final dynamic data = resp is Map ? (resp['data'] ?? resp) : resp;
+    final candidates = <String>[];
+
+    if (data is Map && data['dl_numbers'] is List) {
+      for (final item in (data['dl_numbers'] as List)) {
+        final s = _safeString(item);
+        if (s != null) candidates.add(s);
+      }
+    }
+
+    if (candidates.isEmpty) {
+      final text = _safeString(_deepFindString(data, ['extracted_text', 'dl_number', 'dl_numbers']));
+      if (text != null) candidates.add(text);
+    }
+
+    final unique = <String>[];
+    for (final item in candidates) {
+      if (!unique.contains(item)) unique.add(item);
+    }
+    return unique;
+  }
+
+  String? _extractRcNumber(dynamic resp) {
+    final dynamic data = resp is Map ? (resp['data'] ?? resp) : resp;
+    return _safeString(_deepFindString(data, [
+      'extracted_text', 'rc_number', 'regn_number', 'regnno',
+      'rc_regn_no', 'regNo', 'vehicle_number', 'number_plate',
+    ]));
+  }
+
+  void _resetDlAutofillState({bool clearNumber = false}) {
+    _dlBlacklistCancelled = false;
+    _dlBlacklistExtracting = false;
+    _dlBlacklistCandidates = [];
+    _dlBlacklistCandidateIndex = 0;
+    if (clearNumber) {
+      _formCtrls['number']?.clear();
+    }
+  }
+
+  void _resetRcAutofillState({bool clearNumber = false}) {
+    _rcBlacklistCancelled = false;
+    _rcBlacklistExtracting = false;
+    if (clearNumber) {
+      _formCtrls['number']?.clear();
+    }
+  }
+
+  void _cancelDlAutofill() {
+    _dlBlacklistCancelled = true;
+    _dlBlacklistRequestId++;
+    if (mounted) {
+      setState(() {
+        _dlBlacklistExtracting = false;
+      });
+    }
+  }
+
+  void _cancelRcAutofill() {
+    _rcBlacklistCancelled = true;
+    _rcBlacklistRequestId++;
+    if (mounted) {
+      setState(() {
+        _rcBlacklistExtracting = false;
+      });
+    }
+  }
+
+  void _cycleDlCandidate() {
+    if (_dlBlacklistCandidates.isEmpty) return;
+    _dlBlacklistCandidateIndex = (_dlBlacklistCandidateIndex + 1) % _dlBlacklistCandidates.length;
+    _formCtrls['number']?.text = _dlBlacklistCandidates[_dlBlacklistCandidateIndex];
+    if (mounted) setState(() {});
+  }
+
+  void _populateRcDetails(dynamic data) {
+    final map = data is Map ? data : <String, dynamic>{};
+
+    // Map aishtrex API keys (rc_*) and also fallback to generic keys
+    _formCtrls['owner']?.text = _safeString(_deepFindString(map, [
+      'rc_owner_name', 'owner_name', 'owner', 'registered_owner'])) ?? '';
+    _formCtrls['maker']?.text = _safeString(_deepFindString(map, [
+      'rc_maker_desc', 'rc_maker_model', 'maker_class', 'maker', 'manufacturer'])) ?? '';
+    _formCtrls['vehicle']?.text = _safeString(_deepFindString(map, [
+      'rc_vh_class_desc', 'rc_vhclass_desc', 'vehicle_class', 'class_of_vehicle', 'vehicle_type'])) ?? '';
+    // Wheel type: derive from rc_vh_class_desc (e.g. "Motor Car(LMV)" -> "4 Wheeler")
+    final vhClassDesc = _safeString(_deepFindString(map, ['rc_vh_class_desc', 'rc_vhclass_desc'])) ?? '';
+    final wheelDerived = _deriveWheelType(vhClassDesc);
+    _formCtrls['wheel']?.text = _safeString(_deepFindString(map, [
+      'wheel_type', 'wheel'])) ?? wheelDerived;
+    _formCtrls['father']?.text = _safeString(_deepFindString(map, [
+      'father_name', 'father'])) ?? '';
+    _formCtrls['address']?.text = _safeString(_deepFindString(map, [
+      'rc_present_address', 'rc_permanent_address', 'address', 'present_address', 'permanent_address'])) ?? '';
+    _formCtrls['fuel']?.text = _safeString(_deepFindString(map, [
+      'rc_fuel_desc', 'fuel_used', 'fuel'])) ?? '';
+    _formCtrls['body']?.text = _safeString(_deepFindString(map, [
+      'type_of_body', 'body_type'])) ?? '';
+    _formCtrls['mfg']?.text = _safeString(_deepFindString(map, [
+      'rc_manu_month_yr', 'mfg_month_year', 'manufacturing_date', 'mfg'])) ?? '';
+    _formCtrls['chassis']?.text = _safeString(_deepFindString(map, [
+      'rc_chasi_no', 'chassis_number', 'chassis_no'])) ?? '';
+    _formCtrls['engine']?.text = _safeString(_deepFindString(map, [
+      'rc_eng_no', 'engine_number', 'engine_no'])) ?? '';
+    _formCtrls['regn_date']?.text = _safeString(_deepFindString(map, [
+      'rc_purchase_dt', 'registration_date', 'regn_date'])) ?? '';
+    _formCtrls['valid_upto']?.text = _safeString(_deepFindString(map, [
+      'rc_regn_upto', 'rc_fit_upto', 'valid_upto', 'validity', 'expiry_date'])) ?? '';
+    _formCtrls['tax_paid']?.text = _safeString(_deepFindString(map, [
+      'rc_tax_upto', 'tax_paid', 'tax'])) ?? '';
+  }
+
+  /// Derive wheel type from vehicle class description (aishtrex specific)
+  String _deriveWheelType(String vhClassDesc) {
+    final lower = vhClassDesc.toLowerCase();
+    if (lower.contains('two') || lower.contains('2w') || lower.contains('motorcycle') ||
+        lower.contains('scooter') || lower.contains('moped')) {
+      return '2 Wheeler';
+    } else if (lower.contains('three') || lower.contains('3w') || lower.contains('auto')) {
+      return '3 Wheeler';
+    } else if (lower.contains('lmv') || lower.contains('motor car') ||
+        lower.contains('four') || lower.contains('4w') || lower.contains('truck') ||
+        lower.contains('bus') || lower.contains('maxi')) {
+      return '4 Wheeler';
+    }
+    return '';
+  }
+
+  Future<void> _runDlAutofill(XFile picked) async {
+    final file = _xFileToFile(picked);
+    if (file == null) return;
+
+    final requestId = ++_dlBlacklistRequestId;
+    _dlBlacklistCancelled = false;
+
+    if (mounted) {
+      setState(() {
+        _dlBlacklistExtracting = true;
+        _dlBlacklistCandidates = [];
+        _dlBlacklistCandidateIndex = 0;
+      });
+    }
+
+    try {
+      final resp = await _api.ocrDL(file);
+      if (!mounted || requestId != _dlBlacklistRequestId || _dlBlacklistCancelled) return;
+
+      final candidates = _extractDlCandidates(resp);
+      if (candidates.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _dlBlacklistExtracting = false;
+            _formCtrls['number']?.clear();
+          });
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _dlBlacklistCandidates = candidates;
+          _dlBlacklistCandidateIndex = 0;
+          _formCtrls['number']?.text = candidates.first;
+          _dlBlacklistExtracting = false;
+        });
+      }
+    } catch (e) {
+      if (!mounted || requestId != _dlBlacklistRequestId || _dlBlacklistCancelled) return;
+      if (mounted) {
+        setState(() {
+          _dlBlacklistExtracting = false;
+          _formCtrls['number']?.clear();
+        });
+      }
+      devLog('DL OCR error: $e');
+      _showErrorSnackBar(SafeError.format(e, fallback: 'Could not extract DL number from the image. Please type it manually.'));
+    }
+  }
+
+  Future<void> _runRcAutofill(XFile picked) async {
+    final file = _xFileToFile(picked);
+    if (file == null) return;
+
+    final requestId = ++_rcBlacklistRequestId;
+    _rcBlacklistCancelled = false;
+
+    if (mounted) {
+      setState(() {
+        _rcBlacklistExtracting = true;
+      });
+    }
+
+    try {
+      final ocrResp = await _api.ocrRC(file);
+      if (!mounted || requestId != _rcBlacklistRequestId || _rcBlacklistCancelled) return;
+
+      final rcNumber = _extractRcNumber(ocrResp);
+      if (rcNumber == null || rcNumber.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _rcBlacklistExtracting = false;
+            _formCtrls['number']?.clear();
+          });
+        }
+        _showErrorSnackBar('Could not read a vehicle number from the image. Please type the RC number manually, then tap "Fetch Vehicle Details".');
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _formCtrls['number']?.text = rcNumber;
+        });
+      }
+
+      final detailsResp = await _api.getVehicleDetails(rcNumber);
+      if (!mounted || requestId != _rcBlacklistRequestId || _rcBlacklistCancelled) return;
+
+      if (detailsResp['ok'] == true) {
+        // aishtrex returns the fields directly in 'data'
+        final data = detailsResp['data'];
+        if (mounted) {
+          setState(() {
+            _populateRcDetails(data);
+            _rcBlacklistExtracting = false;
+          });
+        }
+        _showInfoSnackBar('Vehicle details auto-filled successfully.');
+      } else {
+        if (mounted) {
+          setState(() {
+            _rcBlacklistExtracting = false;
+          });
+        }
+        _showInfoSnackBar('Vehicle number extracted, but auto-fill details were not available.');
+      }
+    } catch (e) {
+      if (!mounted || requestId != _rcBlacklistRequestId || _rcBlacklistCancelled) return;
+      if (mounted) {
+        setState(() {
+          _rcBlacklistExtracting = false;
+          _formCtrls['number']?.clear();
+        });
+      }
+      devLog('RC OCR error: $e');
+      _showErrorSnackBar(SafeError.format(e, fallback: 'Could not read the RC image. Please type the vehicle number manually.'));
+    }
+  }
   /// -----------------------
   /// Fetching functions
   /// -----------------------
@@ -205,7 +615,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorDL = 'Error loading DL blacklist: $e');
+      devLog('fetchDLs error: $e');
+      setState(() => _errorDL = SafeError.format(e, fallback: 'Error loading DL blacklist.'));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorDL!)));
     } finally {
       if (!mounted) return;
@@ -265,7 +676,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorRC = 'Error loading RC blacklist: $e');
+      devLog('fetchRCs error: $e');
+      setState(() => _errorRC = SafeError.format(e, fallback: 'Error loading RC blacklist.'));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorRC!)));
     } finally {
       if (!mounted) return;
@@ -284,44 +696,46 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       final resp = await _api.listSuspects();
       if (resp is Map && resp['ok'] == true) {
         final body = resp['data'];
-        final Map<String, List<String>> faceMap = {};
+        // New API: body is a List of {name, image} objects (image is base64)
+        // We use an auto-generated unique ID (index-based) as key so duplicate
+        // names are handled correctly. The unique_id is the map key.
+        final Map<String, Map<String, dynamic>> faceMap = {};
 
-        if (body is Map) {
-          body.forEach((key, value) {
-            if (value is List) {
-              if (key == 'known_faces') {
-                for (var url in value) {
-                  if (url is String) {
-                    final uri = Uri.parse(url);
-                    final pathSegments = uri.pathSegments;
-                    if (pathSegments.length >= 2) {
-                      final personName = pathSegments[pathSegments.length - 2];
-                      if (personName.isNotEmpty) {
-                        if (!faceMap.containsKey(personName)) {
-                          faceMap[personName] = [];
-                        }
-                        faceMap[personName]!.add(url);
-                      }
-                    }
-                  }
-                }
-              } else {
-                final personName = key;
-                if (!faceMap.containsKey(personName)) {
-                  faceMap[personName] = [];
-                }
-                faceMap[personName]!.addAll(List<String>.from(value));
-              }
+        if (body is List) {
+          for (int i = 0; i < body.length; i++) {
+            final item = body[i];
+            if (item is Map) {
+              final name = (item['name'] ?? '').toString();
+              final image = item['image']?.toString() ?? '';
+              // Use id field from server if available, otherwise generate one
+              final uniqueId = (item['id'] ?? item['unique_id'] ?? 'face_$i').toString();
+              faceMap[uniqueId] = {
+                'id': uniqueId,
+                'name': name,
+                'image': image,
+              };
             }
+          }
+        } else if (body is Map) {
+          // Fallback: handle old map-style response gracefully
+          int idx = 0;
+          body.forEach((key, value) {
+            final uniqueId = 'face_${idx++}';
+            faceMap[uniqueId] = {
+              'id': uniqueId,
+              'name': key.toString(),
+              'image': value is String ? value : '',
+            };
           });
         }
 
         final q = _faceSearchCtrl.text.trim().toLowerCase();
-        final Map<String, List<String>> filteredMap = q.isEmpty
+        final Map<String, Map<String, dynamic>> filteredMap = q.isEmpty
             ? faceMap
             : {
           for (var entry in faceMap.entries)
-            if (entry.key.toLowerCase().contains(q)) entry.key: entry.value
+            if (entry.value['name'].toString().toLowerCase().contains(q))
+              entry.key: entry.value
         };
         if (!mounted) return;
         setState(() {
@@ -338,7 +752,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorFace = 'Error loading face suspects: $e');
+      devLog('fetchFaces error: $e');
+      setState(() => _errorFace = SafeError.format(e, fallback: 'Error loading face suspects.'));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorFace!)));
     } finally {
       if (!mounted) return;
@@ -349,97 +764,103 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   /// -----------------------
   /// Add & Remove functions
   /// -----------------------
-  Future<void> _addToBlacklist() async {
-    if (!_formKey.currentState!.validate()) return;
 
+  Future<void> _addToBlacklist() async {
     final type = _typeCtrl.text.trim();
+
     if (type == 'face') {
-      _addFaceSuspect();
+      if (!_faceAddFormKey.currentState!.validate()) return;
+    } else {
+      if (!_formKey.currentState!.validate()) return;
+    }
+
+    final reason = _safeString(_formCtrls['reason']?.text);
+    if (type != 'face' && (reason == null || reason.isEmpty)) {
+      _showErrorSnackBar('Reason for blacklisting is required.');
+      return;
+    }
+
+    if (type == 'face') {
+      await _addFaceSuspect();
       return;
     }
 
     final payload = <String, dynamic>{
       'type': type,
-      'number': _formCtrls['number']!.text.trim(),
-      if (type == 'dl') ...{
-        'name': _formCtrls['name']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['name']!.text.trim(),
-        'phone_number': _formCtrls['phone']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['phone']!.text.trim(),
-        'crime_involved': _formCtrls['crime']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['crime']!.text.trim(),
-      },
-      if (type == 'rc') ...{
-        'owner_name': _formCtrls['name']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['name']!.text.trim(),
-        'maker_class': _formCtrls['maker']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['maker']!.text.trim(),
-        'vehicle_class': _formCtrls['vehicle']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['vehicle']!.text.trim(),
-        'wheel_type': _formCtrls['wheel']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['wheel']!.text.trim(),
-        'crime_involved': _formCtrls['crime']!.text.trim().isEmpty
-            ? null
-            : _formCtrls['crime']!.text.trim(),
-      },
-    }..removeWhere((k, v) => v == null);
+      'number': _safeString(_formCtrls['number']?.text),
+      'reason': reason,
+    };
+
+    if (type == 'dl') {
+      final name = _safeString(_formCtrls['name']?.text);
+      final phone = _safeString(_formCtrls['phone']?.text);
+      if (name != null) payload['name'] = name;
+      if (phone != null) payload['phone_number'] = phone;
+    }
+
+    if (type == 'rc') {
+      final fields = {
+        'owner_name': _safeString(_formCtrls['owner']?.text),
+        'maker_class': _safeString(_formCtrls['maker']?.text),
+        'vehicle_class': _safeString(_formCtrls['vehicle']?.text),
+        'wheel_type': _safeString(_formCtrls['wheel']?.text),
+        'father_name': _safeString(_formCtrls['father']?.text),
+        'address': _safeString(_formCtrls['address']?.text),
+        'fuel_used': _safeString(_formCtrls['fuel']?.text),
+        'type_of_body': _safeString(_formCtrls['body']?.text),
+        'mfg_month_year': _safeString(_formCtrls['mfg']?.text),
+        'chassis_number': _safeString(_formCtrls['chassis']?.text),
+        'engine_number': _safeString(_formCtrls['engine']?.text),
+        'registration_date': _safeString(_formCtrls['regn_date']?.text),
+        'valid_upto': _safeString(_formCtrls['valid_upto']?.text),
+        'tax_paid': _safeString(_formCtrls['tax_paid']?.text),
+      };
+      fields.forEach((key, value) {
+        if (value != null) payload[key] = value;
+      });
+    }
+
+    payload.removeWhere((key, value) => value == null || (value is String && value.trim().isEmpty));
 
     if (!mounted) return;
-    setState(() {
-      if (type == 'dl') {
-        _loadingDL = true;
-      } else {
-        _loadingRC = true;
-      }
-    });
+    setState(() => _submittingBlacklist = true);
 
     try {
-      final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist');
-      final headers = await _getHeaders();
-
-      final res = await http
-          .post(uri, headers: headers, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 15));
-      final resp = jsonDecode(res.body);
+      final resp = await _api.addToBlacklist(payload);
 
       if (!mounted) return;
-
-      if (res.statusCode == 200 || res.statusCode == 201) {
+      if (resp is Map && resp['ok'] == true) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Added to blacklist successfully!'),
-            backgroundColor: Colors.green));
+          content: Text('Added to blacklist successfully!'),
+          backgroundColor: Colors.green,
+        ));
+
         if (type == 'dl') {
           await _fetchDLs(page: 1);
-        } else {
+        } else if (type == 'rc') {
           await _fetchRCs(page: 1);
         }
         Navigator.of(context).pop();
       } else {
-        final msg = resp['message'] ?? 'Failed to add';
+        final msg = (resp is Map)
+            ? (resp['message'] ?? 'Failed to add')
+            : 'Failed to add';
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(msg), backgroundColor: Colors.red));
+          SnackBar(content: Text(msg), backgroundColor: Colors.red),
+        );
       }
     } catch (e) {
       if (!mounted) return;
+      devLog('addToBlacklist error: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
+        SnackBar(content: Text(SafeError.format(e, fallback: 'Failed to add to blacklist. Please try again.')), backgroundColor: Colors.red),
+      );
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _loadingDL = false;
-        _loadingRC = false;
-      });
+      if (mounted) setState(() => _submittingBlacklist = false);
     }
   }
 
-  // Helpers for Face deletions
+// Helpers for Face deletions
   bool _mapIndicatesDeleted(dynamic obj) {
     try {
       if (obj == null) return false;
@@ -599,8 +1020,15 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
       if (!mounted) return;
       if (resp is Map && resp['ok'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Suspect added successfully!'),
+        // Extract unique ID assigned by the server if available
+        final assignedId = (resp['data'] is Map)
+            ? (resp['data']['unique_id'] ?? resp['data']['id'] ?? resp['data']['person_id'])?.toString()
+            : null;
+        final msg = assignedId != null
+            ? 'Suspect added! Unique ID: $assignedId'
+            : 'Suspect added successfully!';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(msg),
             backgroundColor: Colors.green));
         await _fetchFaces();
       } else {
@@ -617,8 +1045,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         }
       } catch (_) {}
       if (mounted) {
+        devLog('addFaceSuspect error: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
+            SnackBar(content: Text(SafeError.format(e, fallback: 'Failed to add face suspect. Please try again.')), backgroundColor: Colors.red));
       }
     }
   }
@@ -661,8 +1090,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
     } catch (e) {
       if (mounted) {
+        devLog('markValid error: $e');
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Remove failed: $e'), backgroundColor: Colors.red));
+            content: Text(SafeError.format(e, fallback: 'Failed to remove from blacklist. Please try again.')), backgroundColor: Colors.red));
       }
       return false;
     }
@@ -671,24 +1101,42 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   /// -----------------------
   /// UI pieces
   /// -----------------------
-  Widget _buildListContent(List<Map<String, dynamic>> list, String type, String? error,
-      bool loading, ScrollController scrollController) {
-    if (loading && list.isEmpty) {
+
+  Widget _buildListContent(
+      List<Map<String, dynamic>> list,
+      String type,
+      String? error,
+      bool loading,
+      ScrollController scrollController,
+      ) {
+    final query = type == 'dl' ? _dlSearchCtrl.text.trim() : _rcSearchCtrl.text.trim();
+    final visibleList = _semanticFilterEntries(list, query);
+
+    if (loading && visibleList.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (error != null && list.isEmpty) {
+    if (error != null && visibleList.isEmpty) {
       return Center(child: Text(error, style: const TextStyle(color: Colors.red)));
     }
 
-    if (list.isEmpty) {
+    if (visibleList.isEmpty) {
       return Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
             Icon(type == 'dl' ? Icons.no_accounts : Icons.directions_car,
                 size: 60, color: Colors.black38),
             const SizedBox(height: 16),
-            Text('No blacklisted ${type.toUpperCase()}s found.',
-                style: const TextStyle(fontSize: 18, color: Colors.black54)),
-          ]));
+            Text(
+              query.isNotEmpty
+                  ? 'No matching ${type.toUpperCase()} entries found.'
+                  : 'No blacklisted ${type.toUpperCase()}s found.',
+              style: const TextStyle(fontSize: 18, color: Colors.black54),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      );
     }
 
     final isSuperAdmin = widget.role == 'superadmin';
@@ -700,49 +1148,40 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       child: ListView.builder(
         controller: scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: list.length + (loading && list.isNotEmpty ? 1 : 0),
+        itemCount: visibleList.length + (loading && visibleList.isNotEmpty ? 1 : 0),
         itemBuilder: (ctx, i) {
-          if (i == list.length) {
+          if (i == visibleList.length) {
             return const Center(
-                child: Padding(
-                    padding: EdgeInsets.all(8),
-                    child: CircularProgressIndicator()));
+              child: Padding(
+                padding: EdgeInsets.all(8),
+                child: CircularProgressIndicator(),
+              ),
+            );
           }
 
-          final entry = list[i];
-          // final id = (entry['_id'] is Map)
-          //     ? (entry['_id']['\$oid'] ?? entry['_id'].toString())
-          //     : entry['_id']?.toString() ?? '';
+          final entry = visibleList[i];
 
-          // NEW / FIXED
           dynamic rawId = entry['id'];
           String id = '';
 
           if (rawId != null) {
             if (rawId is Map) {
-              // Handle MongoDB extended JSON format { "$oid": "..." }
               id = rawId[r'$oid']?.toString() ?? rawId.toString();
             } else {
-              // Handle standard SQL integers or strings
               id = rawId.toString();
             }
           }
 
           if (id.isEmpty) {
-            print("WARNING: Could not extract ID from entry: $entry");
-          }
-
-          // DEBUG LOG: helps verify exactly what we extracted
-          if (id.contains('{') || id.contains('}')) {
-            devLog('WARNING: ID extraction failed, got complex object: $id');
-
+            devLog('WARNING: Could not extract ID from entry: $entry');
           }
 
           final title = type == 'dl'
-              ? (entry['dl_number'] ?? entry['dl'] ?? 'Unknown DL')
+              ? (entry['dl_number'] ?? entry['dl'] ?? entry['number'] ?? 'Unknown DL')
               : (entry['regn_number'] ??
               entry['rc_number'] ??
               entry['regnNo'] ??
+              entry['number'] ??
               'Unknown RC');
           final subtitle = _buildSubtitle(entry, type);
           final status = (entry['verification'] ??
@@ -752,14 +1191,15 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
               .toString();
 
           return Dismissible(
-            key: ValueKey(id),
+            key: ValueKey(id.isNotEmpty ? id : '$type-$i'),
             direction: dismissDirection,
             background: Container(
               alignment: Alignment.centerRight,
               padding: const EdgeInsets.symmetric(horizontal: 20),
               decoration: BoxDecoration(
-                  color: Colors.red.shade100,
-                  borderRadius: BorderRadius.circular(12)),
+                color: Colors.red.shade100,
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: const Icon(Icons.delete_forever, color: Colors.red),
             ),
             confirmDismiss: (direction) async {
@@ -794,7 +1234,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                 setState(() {
                   list.removeWhere((e) {
                     final eid = (e['id'] is Map)
-                        ? (e['id']['\$oid'] ?? e['id'].toString())
+                        ? (e['id'][r'$oid'] ?? e['id'].toString())
                         : e['id']?.toString() ?? '';
                     return eid == id;
                   });
@@ -814,21 +1254,24 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                 contentPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 leading: CircleAvatar(
-                    backgroundColor: type == 'dl'
-                        ? Colors.blue.shade50
-                        : Colors.teal.shade50,
-                    child: Icon(
-                        type == 'dl' ? Icons.badge : Icons.directions_car,
-                        color: type == 'dl' ? Colors.blue : Colors.teal)),
-                title: Text(title,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                  backgroundColor:
+                  type == 'dl' ? Colors.blue.shade50 : Colors.teal.shade50,
+                  child: Icon(
+                    type == 'dl' ? Icons.badge : Icons.directions_car,
+                    color: type == 'dl' ? Colors.blue : Colors.teal,
+                  ),
+                ),
+                title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: subtitle,
                 trailing: Chip(
-                  label: Text(status.isNotEmpty ? status : '-',
-                      style: TextStyle(
-                          color: status.toLowerCase().contains('black')
-                              ? Colors.red.shade700
-                              : Colors.green.shade700)),
+                  label: Text(
+                    status.isNotEmpty ? status : '-',
+                    style: TextStyle(
+                      color: status.toLowerCase().contains('black')
+                          ? Colors.red.shade700
+                          : Colors.green.shade700,
+                    ),
+                  ),
                   backgroundColor: status.toLowerCase().contains('black')
                       ? Colors.red.shade50
                       : Colors.green.shade50,
@@ -842,40 +1285,55 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     );
   }
 
+
   Widget _buildFaceListContent(String? error, bool loading, ScrollController scrollController) {
-    if (loading && _faceMap.isEmpty) {
+    final q = _faceSearchCtrl.text.trim().toLowerCase();
+    final filteredMap = q.isEmpty
+        ? _faceMap
+        : {
+      for (final entry in _faceMap.entries)
+        if ((entry.value['name'] ?? '').toString().toLowerCase().contains(q))
+          entry.key: entry.value,
+    };
+
+    if (loading && filteredMap.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (error != null && _faceMap.isEmpty) {
+    if (error != null && filteredMap.isEmpty) {
       return Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(error, style: const TextStyle(color: Colors.red, fontSize: 16)),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _fetchFaces,
-                child: const Text('Retry'),
-              ),
-            ],
-          ));
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(error, style: const TextStyle(color: Colors.red, fontSize: 16)),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _fetchFaces,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
     }
 
-    if (_faceMap.isEmpty) {
+    if (filteredMap.isEmpty) {
       return Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
             const Icon(Icons.face_retouching_off, size: 60, color: Colors.black38),
             const SizedBox(height: 16),
             const Text('No face suspects found.',
                 style: TextStyle(fontSize: 18, color: Colors.black54)),
-          ]));
+          ],
+        ),
+      );
     }
 
     final isSuperAdmin = widget.role == 'superadmin';
     final dismissDirection =
     isSuperAdmin ? DismissDirection.endToStart : DismissDirection.none;
-    final filteredKeys = _faceMap.keys.toList();
+    final filteredKeys = filteredMap.keys.toList();
 
     return RefreshIndicator(
       onRefresh: _fetchFaces,
@@ -884,13 +1342,29 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         itemCount: filteredKeys.length,
         itemBuilder: (ctx, i) {
-          final personName = filteredKeys[i];
-          final List<dynamic> images = _faceMap[personName]!;
+          final uniqueId = filteredKeys[i];
+          final suspect = filteredMap[uniqueId]!;
+          final personName = (suspect['name'] ?? '').toString();
+          final imageB64 = (suspect['image'] ?? '').toString();
 
-          final imageUrl = _convertGsUrlToHttp(images.isNotEmpty ? images.first : null);
+          Widget leadingWidget;
+          if (imageB64.isNotEmpty) {
+            try {
+              final bytes = base64Decode(imageB64);
+              leadingWidget = ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(bytes, width: 50, height: 50, fit: BoxFit.cover,
+                    errorBuilder: (c, o, s) => const Icon(Icons.person, size: 50)),
+              );
+            } catch (_) {
+              leadingWidget = const Icon(Icons.person, size: 50);
+            }
+          } else {
+            leadingWidget = const Icon(Icons.person, size: 50);
+          }
 
           return Dismissible(
-            key: ValueKey(personName),
+            key: ValueKey(uniqueId),
             direction: dismissDirection,
             background: Container(
               alignment: Alignment.centerRight,
@@ -923,7 +1397,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                   }
                 } else {
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                         content: Text('Failed to delete suspect'),
                         backgroundColor: Colors.red));
                   }
@@ -931,7 +1405,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
               } catch (e) {
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                      content: Text(SafeError.format(e, fallback: 'Failed to delete suspect. Please try again.')), backgroundColor: Colors.red));
                 }
                 success = false;
               } finally {
@@ -947,7 +1421,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
             onDismissed: (direction) {
               if (mounted) {
                 setState(() {
-                  _faceMap.remove(personName);
+                  _faceMap.remove(uniqueId);
                   _faceTotal = _faceMap.length;
                 });
               }
@@ -959,22 +1433,11 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
               child: ListTile(
                 contentPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: imageUrl != null
-                      ? Image.network(imageUrl,
-                      width: 50,
-                      height: 50,
-                      fit: BoxFit.cover,
-                      errorBuilder: (c, o, s) =>
-                      const Icon(Icons.person, size: 50))
-                      : const Icon(Icons.person, size: 50),
-                ),
+                leading: leadingWidget,
                 title: Text(personName,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                    '${images.length} photo${images.length == 1 ? '' : 's'}'),
-                onTap: () => _showSuspectDetails(context, personName, images),
+                subtitle: Text('ID: $uniqueId'),
+                onTap: () => _showSuspectDetails(context, personName, uniqueId, imageB64),
               ),
             ),
           );
@@ -1039,202 +1502,643 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     );
   }
 
+
   void _showAddBottomSheet() {
-    _formCtrls.forEach((key, ctrl) => ctrl.clear());
-    _faceAddName.clear();
-    _faceAddImage = null;
+    void clearDlFields() {
+      _dlBlacklistImage = null;
+      _dlBlacklistCandidates = [];
+      _dlBlacklistCandidateIndex = 0;
+      _formCtrls['number']?.clear();
+      _formCtrls['reason']?.clear();
+      _formCtrls['name']?.clear();
+      _formCtrls['phone']?.clear();
+      _cancelDlAutofill();
+    }
+
+    void clearRcFields() {
+      _rcBlacklistImage = null;
+      for (final key in [
+        'number',
+        'reason',
+        'owner',
+        'maker',
+        'vehicle',
+        'wheel',
+        'father',
+        'address',
+        'fuel',
+        'body',
+        'mfg',
+        'chassis',
+        'engine',
+        'regn_date',
+        'valid_upto',
+        'tax_paid',
+      ]) {
+        _formCtrls[key]?.clear();
+      }
+      _cancelRcAutofill();
+    }
+
+    void clearFaceFields() {
+      _faceAddImage = null;
+      _faceAddName.clear();
+    }
+
+    clearDlFields();
+    clearRcFields();
+    clearFaceFields();
 
     if (_tabController.index == 0) {
       _typeCtrl.text = 'dl';
-    } else if (_tabController.index == 1)
+    } else if (_tabController.index == 1) {
       _typeCtrl.text = 'rc';
-    else
+    } else {
       _typeCtrl.text = 'face';
+    }
 
     showModalBottomSheet(
       isScrollControlled: true,
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => StatefulBuilder(
-        builder: (BuildContext context, StateSetter setState) {
+        builder: (BuildContext context, StateSetter setModalState) {
           final mediaQuery = MediaQuery.of(context);
           final isPortrait = mediaQuery.orientation == Orientation.portrait;
+          final type = _typeCtrl.text.trim();
+
+          Future<void> pickDlImage(ImageSource source) async {
+            final picked = await _imagePicker.pickImage(
+              source: source,
+              imageQuality: 85,
+            );
+            if (picked == null) return;
+
+            final valid = await _validatePickedImage(picked);
+            if (!valid) {
+              if (mounted) {
+                _showErrorSnackBar('Security Error: Invalid image file.');
+              }
+              return;
+            }
+
+            clearDlFields();
+            if (mounted) {
+              setState(() {
+                _dlBlacklistImage = picked;
+              });
+            }
+            setModalState(() {});
+
+            await _runDlAutofill(picked);
+            if (mounted) setModalState(() {});
+          }
+
+          Future<void> pickRcImage(ImageSource source) async {
+            final picked = await _imagePicker.pickImage(
+              source: source,
+              imageQuality: 85,
+            );
+            if (picked == null) return;
+
+            final valid = await _validatePickedImage(picked);
+            if (!valid) {
+              if (mounted) {
+                _showErrorSnackBar('Security Error: Invalid image file.');
+              }
+              return;
+            }
+
+            clearRcFields();
+            if (mounted) {
+              setState(() {
+                _rcBlacklistImage = picked;
+              });
+            }
+            setModalState(() {});
+
+            await _runRcAutofill(picked);
+            if (mounted) setModalState(() {});
+          }
+
+          Widget autoField(String label, TextEditingController ctrl) {
+            return TextFormField(
+              controller: ctrl,
+              readOnly: true,
+              decoration: InputDecoration(
+                labelText: label,
+                border: const OutlineInputBorder(),
+                filled: true,
+                fillColor: Colors.grey.shade100,
+              ),
+            );
+          }
+
+          Widget actionSuffixDl() {
+            if (_dlBlacklistExtracting) {
+              return IconButton(
+                tooltip: 'Cancel extraction',
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  _cancelDlAutofill();
+                  setModalState(() {});
+                },
+              );
+            }
+
+            if (_dlBlacklistCandidates.length > 1) {
+              final current = _dlBlacklistCandidateIndex + 1;
+              final total = _dlBlacklistCandidates.length;
+              return IconButton(
+                tooltip: 'Show next DL suggestion',
+                onPressed: () {
+                  _cycleDlCandidate();
+                  setModalState(() {});
+                },
+                icon: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    const Icon(Icons.swap_horiz),
+                    Positioned(
+                      right: -10,
+                      top: -8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade600,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '$current/$total',
+                          style: const TextStyle(fontSize: 10, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            if (_dlBlacklistImage != null) {
+              return IconButton(
+                tooltip: 'Refresh OCR',
+                icon: const Icon(Icons.refresh),
+                onPressed: () async {
+                  await _runDlAutofill(_dlBlacklistImage!);
+                  if (mounted) setModalState(() {});
+                },
+              );
+            }
+
+            return const SizedBox.shrink();
+          }
+
+          Widget actionSuffixRc() {
+            if (_rcBlacklistExtracting) {
+              return IconButton(
+                tooltip: 'Cancel extraction',
+                icon: const Icon(Icons.close),
+                onPressed: () {
+                  _cancelRcAutofill();
+                  setModalState(() {});
+                },
+              );
+            }
+
+            if (_rcBlacklistImage != null) {
+              return IconButton(
+                tooltip: 'Refresh OCR',
+                icon: const Icon(Icons.refresh),
+                onPressed: () async {
+                  await _runRcAutofill(_rcBlacklistImage!);
+                  if (mounted) setModalState(() {});
+                },
+              );
+            }
+
+            return const SizedBox.shrink();
+          }
+
+          Widget uploadCard({
+            required String title,
+            required XFile? image,
+            required VoidCallback onCamera,
+            required VoidCallback onGallery,
+            required bool extracting,
+            String? extraText,
+          }) {
+            return Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.grey.shade50,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: extracting ? null : onCamera,
+                          icon: const Icon(Icons.camera_alt),
+                          label: const Text('Camera'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: extracting ? null : onGallery,
+                          icon: const Icon(Icons.photo_library),
+                          label: const Text('Gallery'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (image != null || (extraText != null && extraText.isNotEmpty)) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle,
+                            color: extracting ? Colors.orange : Colors.green, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            extracting
+                                ? 'Extracting... you can cancel and type manually'
+                                : extraText ?? image!.name,
+                            style: TextStyle(
+                              color: extracting ? Colors.orange.shade800 : Colors.green.shade800,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }
+
           return Padding(
             padding: EdgeInsets.only(
-                bottom: mediaQuery.viewInsets.bottom,
-                top: 20,
-                left: isPortrait ? 20 : 40,
-                right: isPortrait ? 20 : 40),
+              bottom: mediaQuery.viewInsets.bottom,
+              top: 20,
+              left: isPortrait ? 20 : 40,
+              right: isPortrait ? 20 : 40,
+            ),
             child: SingleChildScrollView(
               child: Form(
-                key: _typeCtrl.text == 'face' ? _faceAddFormKey : _formKey,
+                key: type == 'face' ? _faceAddFormKey : _formKey,
                 child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('Add New Blacklist Entry',
-                                style: Theme.of(context).textTheme.titleLarge),
-                            IconButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                icon: const Icon(Icons.close)),
-                          ]),
-                      const SizedBox(height: 20),
-                      DropdownButtonFormField<String>(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Add New Blacklist Entry',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        IconButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    DropdownButtonFormField<String>(
+                      decoration: const InputDecoration(
+                        labelText: 'Entry Type',
+                        border: OutlineInputBorder(),
+                      ),
+                      value: type,
+                      items: const [
+                        DropdownMenuItem(value: 'dl', child: Text('Driving License (DL)')),
+                        DropdownMenuItem(value: 'rc', child: Text('Registration Certificate (RC)')),
+                        DropdownMenuItem(value: 'face', child: Text('Face Suspect')),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setModalState(() {
+                          _typeCtrl.text = v;
+                          clearDlFields();
+                          clearRcFields();
+                          clearFaceFields();
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    if (type == 'face') ...[
+                      TextFormField(
+                        controller: _faceAddName,
                         decoration: const InputDecoration(
-                            labelText: 'Entry Type', border: OutlineInputBorder()),
-                        value: _typeCtrl.text,
-                        items: const [
-                          DropdownMenuItem(value: 'dl', child: Text('Driving License (DL)')),
-                          DropdownMenuItem(value: 'rc', child: Text('Registration Certificate (RC)')),
-                          DropdownMenuItem(value: 'face', child: Text('Face Suspect')),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _typeCtrl.text = v);
-                        },
+                          labelText: 'Suspect Name',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (v) => Validators.validateSafeText(v, fieldName: 'Suspect Name'),
                       ),
                       const SizedBox(height: 16),
-                      if (_typeCtrl.text == 'face') ...[
-                        TextFormField(
-                          controller: _faceAddName,
-                          decoration: const InputDecoration(
-                              labelText: 'Suspect Name', border: OutlineInputBorder()),
-                          // ADDED VALIDATOR
-                          validator: (v) => Validators.validateSafeText(v, fieldName: 'Suspect Name'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final picked = await _imagePicker.pickImage(
+                                  source: ImageSource.camera,
+                                  imageQuality: 85,
+                                );
+                                if (picked != null) {
+                                  if (!await _validatePickedImage(picked)) {
+                                    _showErrorSnackBar('Security Error: Invalid image file.');
+                                    return;
+                                  }
+                                  if (mounted) {
+                                    setState(() => _faceAddImage = picked);
+                                  }
+                                  setModalState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.camera_alt),
+                              label: const Text('Take Photo'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final picked = await _imagePicker.pickImage(
+                                  source: ImageSource.gallery,
+                                  imageQuality: 85,
+                                );
+                                if (picked != null) {
+                                  if (!await _validatePickedImage(picked)) {
+                                    _showErrorSnackBar('Security Error: Invalid image file.');
+                                    return;
+                                  }
+                                  if (mounted) {
+                                    setState(() => _faceAddImage = picked);
+                                  }
+                                  setModalState(() {});
+                                }
+                              },
+                              icon: const Icon(Icons.photo_library),
+                              label: const Text('From Gallery'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_faceAddImage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Selected: ${_faceAddImage!.name}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.green)),
+                              const SizedBox(height: 8),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  File(_faceAddImage!.path),
+                                  height: 120,
+                                  width: double.infinity,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (c, e, s) =>
+                                  const Icon(Icons.broken_image, size: 60),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ] else ...[
+                      if (type == 'dl') ...[
+                        uploadCard(
+                          title: 'Upload DL Image (Optional)',
+                          image: _dlBlacklistImage,
+                          onCamera: () => pickDlImage(ImageSource.camera),
+                          onGallery: () => pickDlImage(ImageSource.gallery),
+                          extracting: _dlBlacklistExtracting,
                         ),
                         const SizedBox(height: 16),
-                        Column(
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: () async {
-                                      final ImagePicker picker = ImagePicker();
-                                      final picked = await picker.pickImage(
-                                          source: ImageSource.camera);
-                                      if (picked != null) {
-                                        setState(() => _faceAddImage = picked);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.camera_alt),
-                                    label: const Text('Take Photo'),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: () async {
-                                      final ImagePicker picker = ImagePicker();
-                                      final picked = await picker.pickImage(
-                                          source: ImageSource.gallery);
-                                      if (picked != null) {
-                                        setState(() => _faceAddImage = picked);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.photo_library),
-                                    label: const Text('From Gallery'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (_faceAddImage != null)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 10),
-                                child: Text('Selected: ${_faceAddImage!.name}'),
-                              ),
-                          ],
-                        ),
-                      ] else ...[
                         TextFormField(
                           controller: _formCtrls['number'],
-                          // ADDED VALIDATOR
-                          validator: (v) => Validators.validateID(v, type: _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number'),
+                          validator: (v) => Validators.validateID(v, type: 'DL Number'),
                           decoration: InputDecoration(
-                              labelText:
-                              _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number',
-                              border: const OutlineInputBorder()),
+                            labelText: 'DL Number *',
+                            border: const OutlineInputBorder(),
+                            suffixIcon: actionSuffixDl(),
+                          ),
                         ),
                         const SizedBox(height: 16),
                         TextFormField(
-                            controller: _formCtrls['crime'],
-                            // ADDED VALIDATOR
-                            validator: (v) => v != null && v.isNotEmpty ? Validators.validateReason(v, fieldName: 'Reason') : null,
-                            decoration: const InputDecoration(
-                                labelText: 'Reason for Blacklisting (optional)',
-                                border: const OutlineInputBorder())),
+                          controller: _formCtrls['reason'],
+                          validator: (v) => Validators.validateReason(v, fieldName: 'Reason'),
+                          decoration: const InputDecoration(
+                            labelText: 'Reason for Blacklisting *',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 2,
+                        ),
                         const SizedBox(height: 16),
                         TextFormField(
-                            controller: _formCtrls['name'],
-                            // ADDED VALIDATOR
-                            validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Name') : null,
-                            decoration: InputDecoration(
-                                labelText: _typeCtrl.text == 'dl'
-                                    ? 'Name (optional)'
-                                    : 'Owner Name (optional)',
-                                border: const OutlineInputBorder())),
+                          controller: _formCtrls['name'],
+                          decoration: const InputDecoration(
+                            labelText: 'Name of Person',
+                            border: OutlineInputBorder(),
+                            hintText: 'Optional',
+                          ),
+                        ),
                         const SizedBox(height: 16),
-                        if (_typeCtrl.text == 'dl') ...[
-                          TextFormField(
-                              controller: _formCtrls['phone'],
-                              // Basic validation
-                              validator: (v) {
-                                if (v != null && v.isNotEmpty && !RegExp(r'^[0-9+\-\s]+$').hasMatch(v)) {
-                                  return 'Invalid phone number';
+                        TextFormField(
+                          controller: _formCtrls['phone'],
+                          keyboardType: TextInputType.phone,
+                          decoration: const InputDecoration(
+                            labelText: 'Phone Number',
+                            border: OutlineInputBorder(),
+                            hintText: 'Optional',
+                          ),
+                        ),
+                      ] else ...[
+                        uploadCard(
+                          title: 'Upload RC Image',
+                          image: _rcBlacklistImage,
+                          onCamera: () => pickRcImage(ImageSource.camera),
+                          onGallery: () => pickRcImage(ImageSource.gallery),
+                          extracting: _rcBlacklistExtracting,
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _formCtrls['number'],
+                          validator: (v) => Validators.validateID(v, type: 'RC Number'),
+                          decoration: InputDecoration(
+                            labelText: 'RC / Vehicle Number',
+                            border: const OutlineInputBorder(),
+                            suffixIcon: actionSuffixRc(),
+                          ),
+                          textCapitalization: TextCapitalization.characters,
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            icon: _rcBlacklistExtracting
+                                ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.search),
+                            label: Text(_rcBlacklistExtracting
+                                ? 'Fetching details...' : 'Fetch Vehicle Details'),
+                            onPressed: _rcBlacklistExtracting
+                                ? null
+                                : () async {
+                              final rcNum = _formCtrls['number']?.text.trim() ?? '';
+                              if (rcNum.isEmpty) {
+                                _showErrorSnackBar('Please enter an RC number first.');
+                                return;
+                              }
+                              final requestId = ++_rcBlacklistRequestId;
+                              _rcBlacklistCancelled = false;
+                              if (mounted) setState(() => _rcBlacklistExtracting = true);
+                              setModalState(() {});
+                              try {
+                                final detailsResp = await _api.getVehicleDetails(rcNum);
+                                if (!mounted || requestId != _rcBlacklistRequestId || _rcBlacklistCancelled) return;
+                                if (detailsResp['ok'] == true) {
+                                  final data = detailsResp['data'];
+                                  if (mounted) setState(() {
+                                    _populateRcDetails(data);
+                                    _rcBlacklistExtracting = false;
+                                  });
+                                  setModalState(() {});
+                                  _showInfoSnackBar('Vehicle details auto-filled successfully.');
+                                } else {
+                                  if (mounted) setState(() => _rcBlacklistExtracting = false);
+                                  setModalState(() {});
+                                  _showErrorSnackBar(
+                                      detailsResp['message']?.toString() ??
+                                          'Could not fetch vehicle details.');
                                 }
-                                return null;
-                              },
-                              decoration: const InputDecoration(
-                                  labelText: 'Phone Number (optional)',
-                                  border: const OutlineInputBorder())),
-                          const SizedBox(height: 16),
-                        ],
-                        if (_typeCtrl.text == 'rc') ...[
-                          TextFormField(
-                              controller: _formCtrls['maker'],
-                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Maker') : null,
-                              decoration: const InputDecoration(
-                                  labelText: 'Maker Class (optional)',
-                                  border: const OutlineInputBorder())),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                              controller: _formCtrls['vehicle'],
-                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Vehicle Class') : null,
-                              decoration: const InputDecoration(
-                                  labelText: 'Vehicle Class (optional)',
-                                  border: const OutlineInputBorder())),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                              controller: _formCtrls['wheel'],
-                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Wheel Type') : null,
-                              decoration: const InputDecoration(
-                                  labelText: 'Wheel Type (optional)',
-                                  border: const OutlineInputBorder())),
-                          const SizedBox(height: 16),
-                        ],
+                              } catch (e) {
+                                if (mounted) setState(() => _rcBlacklistExtracting = false);
+                                setModalState(() {});
+                                devLog('Manual RC fetch error: $e');
+                                _showErrorSnackBar(SafeError.format(e, fallback: 'Could not fetch vehicle details. Please check the RC number and try again.'));
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _formCtrls['reason'],
+                          validator: (v) => Validators.validateReason(v, fieldName: 'Reason'),
+                          decoration: const InputDecoration(
+                            labelText: 'Reason for Blacklisting',
+                            border: OutlineInputBorder(),
+                          ),
+                          maxLines: 2,
+                        ),
+                        const SizedBox(height: 16),
+                        Text('Auto-filled vehicle details',
+                            style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 10),
+                        autoField('Owner Name', _formCtrls['owner']!),
+                        const SizedBox(height: 12),
+                        autoField('Maker Class', _formCtrls['maker']!),
+                        const SizedBox(height: 12),
+                        autoField('Vehicle Class', _formCtrls['vehicle']!),
+                        const SizedBox(height: 12),
+                        autoField('Wheel Type', _formCtrls['wheel']!),
+                        const SizedBox(height: 12),
+                        ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          title: const Text('More auto-filled details'),
+                          childrenPadding: const EdgeInsets.only(bottom: 8),
+                          children: [
+                            autoField('Father Name', _formCtrls['father']!),
+                            const SizedBox(height: 12),
+                            autoField('Address', _formCtrls['address']!),
+                            const SizedBox(height: 12),
+                            autoField('Fuel Used', _formCtrls['fuel']!),
+                            const SizedBox(height: 12),
+                            autoField('Body Type', _formCtrls['body']!),
+                            const SizedBox(height: 12),
+                            autoField('Manufacture Date', _formCtrls['mfg']!),
+                            const SizedBox(height: 12),
+                            autoField('Chassis Number', _formCtrls['chassis']!),
+                            const SizedBox(height: 12),
+                            autoField('Engine Number', _formCtrls['engine']!),
+                            const SizedBox(height: 12),
+                            autoField('Registration Date', _formCtrls['regn_date']!),
+                            const SizedBox(height: 12),
+                            autoField('Valid Upto', _formCtrls['valid_upto']!),
+                            const SizedBox(height: 12),
+                            autoField('Tax Paid', _formCtrls['tax_paid']!),
+                          ],
+                        ),
                       ],
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            if (_typeCtrl.text == 'face') {
-                              _addFaceSuspect();
-                            } else {
-                              _addToBlacklist();
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10))),
-                          child: const Text('Add to Blacklist'),
+                    ],
+                    const SizedBox(height: 16),
+                    if (type != 'face')
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.blue.shade700, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                type == 'dl'
+                                    ? 'Optionally upload a DL image to auto-fill the DL number. Fill in the reason (required) and optionally the person\'s name and phone number.'
+                                    : 'Optionally upload an RC image to auto-fill the vehicle number. You can also type it and tap "Fetch Vehicle Details". Only the reason is required.',
+                                style: TextStyle(color: Colors.blue.shade800, fontSize: 12),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ]),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _submittingBlacklist
+                            ? null
+                            : () async {
+                          if (type == 'face') {
+                            await _addFaceSuspect();
+                          } else {
+                            await _addToBlacklist();
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: _submittingBlacklist
+                            ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                            : const Text('Add to Blacklist'),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             ),
           );
@@ -1427,7 +2331,18 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     );
   }
 
-  void _showSuspectDetails(BuildContext parentContext, String name, List<dynamic> imageUrls) {
+  void _showSuspectDetails(BuildContext parentContext, String name, String uniqueId, String imageB64) {
+    Widget _buildImage({double? height, BoxFit fit = BoxFit.cover}) {
+      if (imageB64.isEmpty) return const Icon(Icons.person, size: 100);
+      try {
+        final bytes = base64Decode(imageB64);
+        return Image.memory(bytes, height: height, fit: fit,
+            errorBuilder: (c, e, s) => const Icon(Icons.broken_image, size: 100));
+      } catch (_) {
+        return const Icon(Icons.broken_image, size: 100);
+      }
+    }
+
     showDialog(
       context: parentContext,
       builder: (ctx) {
@@ -1441,26 +2356,69 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Center(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: imageUrls.isNotEmpty
-                            ? Image.network(
-                          _convertGsUrlToHttp(imageUrls.first)!,
-                          height: MediaQuery.of(ctx).size.height * 0.25,
-                          fit: BoxFit.cover,
-                          errorBuilder: (c, e, s) =>
-                          const Icon(Icons.broken_image, size: 100),
-                        )
-                            : const Icon(Icons.person, size: 100),
+                      child: GestureDetector(
+                        onTap: imageB64.isNotEmpty
+                            ? () {
+                          Navigator.of(ctx2).push(MaterialPageRoute(builder: (_) {
+                            // Decode bytes once outside the builder
+                            late final Uint8List imageBytes;
+                            bool decodeOk = false;
+                            try {
+                              imageBytes = base64Decode(imageB64);
+                              decodeOk = true;
+                            } catch (_) {}
+
+                            return Scaffold(
+                              backgroundColor: Colors.black,
+                              appBar: AppBar(
+                                backgroundColor: Colors.black,
+                                iconTheme: const IconThemeData(color: Colors.white),
+                                title: Text(name, style: const TextStyle(color: Colors.white)),
+                              ),
+                              body: decodeOk
+                                  ? InteractiveViewer(
+                                // Allow zooming beyond the widget bounds without clipping
+                                boundaryMargin: const EdgeInsets.all(double.infinity),
+                                minScale: 0.5,
+                                maxScale: 5.0,
+                                child: Center(
+                                  child: Image.memory(
+                                    imageBytes,
+                                    // Fill width; height auto-scales to maintain aspect ratio
+                                    width: double.infinity,
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (c, e, s) => const Icon(
+                                        Icons.broken_image, color: Colors.white, size: 80),
+                                  ),
+                                ),
+                              )
+                                  : const Center(
+                                  child: Icon(Icons.broken_image,
+                                      color: Colors.white, size: 80)),
+                            );
+                          }));
+                        }
+                            : null,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: _buildImage(height: MediaQuery.of(ctx).size.height * 0.25),
+                        ),
                       ),
                     ),
+                    if (imageB64.isNotEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Center(
+                          child: Text('Tap photo to view full screen',
+                              style: TextStyle(fontSize: 11, color: Colors.grey)),
+                        ),
+                      ),
                     const SizedBox(height: 12),
                     Text('Name: $name',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 12),
-                    const Text('Photos in database:',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    ...imageUrls.map((url) => Text('- ${url.split('/').last}')),
+                    const SizedBox(height: 4),
+                    Text('Unique ID: $uniqueId',
+                        style: const TextStyle(fontSize: 13, color: Colors.black54)),
                   ],
                 ),
               ),
@@ -1503,14 +2461,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                             backgroundColor: Colors.green));
                         if (mounted) {
                           setState(() {
-                            _faceMap.remove(name);
+                            _faceMap.remove(uniqueId);
                             _faceTotal = _faceMap.length;
                           });
                         }
                         Navigator.of(ctx2).pop();
                       } else {
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                               content: Text('Failed to delete suspect'),
                               backgroundColor: Colors.red));
                         }
@@ -1523,7 +2481,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       } catch (_) {}
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                            content: Text(SafeError.format(e, fallback: 'Failed to delete suspect. Please try again.')), backgroundColor: Colors.red));
                       }
                     }
                   },
@@ -1542,6 +2500,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         : _tabController.index == 1
         ? _rcSearchCtrl
         : _faceSearchCtrl;
+
+    final displayedDlCount = _semanticFilterEntries(_dlList, _dlSearchCtrl.text.trim()).length;
+    final displayedRcCount = _semanticFilterEntries(_rcList, _rcSearchCtrl.text.trim()).length;
+    final displayedFaceCount = _faceSearchCtrl.text.trim().isEmpty
+        ? _faceMap.length
+        : _faceMap.values.where(
+          (v) => (v['name'] ?? '').toString().toLowerCase().contains(_faceSearchCtrl.text.trim().toLowerCase()),
+    ).length;
 
     return Scaffold(
       appBar: AppBar(
@@ -1608,9 +2574,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
               TabBar(
                 controller: _tabController,
                 tabs: [
-                  Tab(text: 'DL ($_dlTotal)'),
-                  Tab(text: 'RC ($_rcTotal)'),
-                  Tab(text: 'Face ($_faceTotal)'),
+                  Tab(text: 'DL ($displayedDlCount)'),
+                  Tab(text: 'RC ($displayedRcCount)'),
+                  Tab(text: 'Face ($displayedFaceCount)'),
                 ],
                 labelStyle: const TextStyle(fontWeight: FontWeight.bold),
                 indicatorWeight: 3.0,

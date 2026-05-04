@@ -1,6 +1,5 @@
 // lib/pages/home.dart
 
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -8,12 +7,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-import 'package:http_parser/http_parser.dart';
 import '../utils/safe_log.dart';
 import '../utils/validators.dart'; // Import Validators
 import 'verification.dart'; // <- uses verifyDriverAndShowDialog()
+import '../services/api_service.dart';
 
 class HomePageContent extends StatefulWidget {
   const HomePageContent({super.key});
@@ -23,19 +21,327 @@ class HomePageContent extends StatefulWidget {
 }
 
 class _HomePageContentState extends State<HomePageContent> {
+  final ApiService _apiService = ApiService();
   // ====== Configure Backend / Model URLs HERE ======
   // Leave verify empty if you don't want verify POSTs from the app
   final String _verifyBaseUrl = '';
 
+  List<String> _dlCandidates = [];
+  int _dlCandidateIndex = 0;
+  int _dlRequestSerial = 0;
+  bool _dlRequestCancelled = false;
+
+  int _rcRequestSerial = 0;
+  bool _rcRequestCancelled = false;
+
+  Future<void> _extractDlFromService(File file) async {
+    final int requestId = ++_dlRequestSerial;
+    setState(() {
+      _dlExtracting = true;
+      _dlRequestCancelled = false;
+      _dlCandidates = [];
+      _dlCandidateIndex = 0;
+      _dlController.text = 'Extracting...';
+    });
+
+    try {
+      final result = await _apiService.ocrDL(file);
+
+      if (!mounted || requestId != _dlRequestSerial || _dlRequestCancelled) {
+        return;
+      }
+
+      if (result['ok'] == true) {
+        final candidates = _extractDlCandidates(result);
+
+        if (candidates.isNotEmpty) {
+          setState(() {
+            _dlCandidates = candidates;
+            _dlCandidateIndex = 0;
+            if (_dlController.text.trim().isEmpty || _dlController.text.trim() == 'Extracting...') {
+              _dlController.text = _dlCandidates.first;
+            }
+          });
+        } else {
+          final text = (result['extracted_text'] ?? '').toString().trim();
+          if (text.isNotEmpty) {
+            setState(() {
+              _dlCandidates = [text];
+              _dlCandidateIndex = 0;
+              if (_dlController.text.trim().isEmpty || _dlController.text.trim() == 'Extracting...') {
+                _dlController.text = text;
+              }
+            });
+          } else {
+            if (_dlController.text.trim() == 'Extracting...') {
+              _dlController.clear();
+            }
+            _showErrorSnackBar('Could not extract DL number from the image.');
+          }
+        }
+      } else {
+        if (_dlController.text.trim() == 'Extracting...') {
+          _dlController.clear();
+        }
+        _showErrorSnackBar(result['message'] ?? 'DL OCR failed');
+      }
+    } catch (e) {
+      if (!mounted || requestId != _dlRequestSerial || _dlRequestCancelled) {
+        return;
+      }
+      if (_dlController.text.trim() == 'Extracting...') {
+        _dlController.clear();
+      }
+      _showErrorSnackBar('DL OCR error: $e');
+    } finally {
+      if (mounted && requestId == _dlRequestSerial) {
+        setState(() => _dlExtracting = false);
+      }
+    }
+  }
+
+  Future<void> _extractRcFromService(File file) async {
+    final int requestId = ++_rcRequestSerial;
+    setState(() {
+      _rcExtracting = true;
+      _rcRequestCancelled = false;
+      _rcController.text = 'Extracting...';
+    });
+
+    try {
+      final result = await _apiService.ocrRC(file);
+
+      if (!mounted || requestId != _rcRequestSerial || _rcRequestCancelled) {
+        return;
+      }
+
+      if (result['ok'] == true) {
+        final text = _normalizeOcrText((result['extracted_text'] ?? '').toString().trim());
+        if (text.isNotEmpty) {
+          if (_rcController.text.trim().isEmpty || _rcController.text.trim() == 'Extracting...') {
+            _rcController.text = text;
+          }
+        } else {
+          if (_rcController.text.trim() == 'Extracting...') {
+            _rcController.clear();
+          }
+          _showErrorSnackBar('Could not extract vehicle number from the image.');
+        }
+      } else {
+        if (_rcController.text.trim() == 'Extracting...') {
+          _rcController.clear();
+        }
+        _showErrorSnackBar(result['message'] ?? 'RC OCR failed');
+      }
+    } catch (e) {
+      if (!mounted || requestId != _rcRequestSerial || _rcRequestCancelled) {
+        return;
+      }
+      if (_rcController.text.trim() == 'Extracting...') {
+        _rcController.clear();
+      }
+      _showErrorSnackBar('RC OCR error: $e');
+    } finally {
+      if (mounted && requestId == _rcRequestSerial) {
+        setState(() => _rcExtracting = false);
+      }
+    }
+  }
+
+  List<String> _extractDlCandidates(dynamic result) {
+    final candidates = <String>[];
+
+    void addCandidate(dynamic value) {
+      final raw = value?.toString().trim();
+      if (raw != null && raw.isNotEmpty) {
+        final text = _normalizeOcrText(raw);
+        if (text.isNotEmpty && !candidates.contains(text)) {
+          candidates.add(text);
+        }
+      }
+    }
+
+    final data = result is Map ? result['data'] : null;
+    if (data is Map) {
+      final dlNumbers = data['dl_numbers'];
+      if (dlNumbers is List) {
+        for (final item in dlNumbers) {
+          addCandidate(item);
+        }
+      }
+    }
+
+    if (candidates.isEmpty) {
+      final extractedRaw = result is Map ? result['extracted_text'] : null;
+      final extracted = extractedRaw?.toString().trim() ?? '';
+      if (extracted.isNotEmpty) {
+        for (final part in extracted.split(',')) {
+          addCandidate(part);
+        }
+        if (candidates.isEmpty) {
+          addCandidate(extracted);
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  void _cancelDlExtraction() {
+    if (!_dlExtracting) return;
+    setState(() {
+      _dlRequestCancelled = true;
+      _dlRequestSerial++;
+      _dlExtracting = false;
+      _dlCandidates = [];
+      _dlCandidateIndex = 0;
+      if (_dlController.text.trim() == 'Extracting...') {
+        _dlController.clear();
+      }
+    });
+  }
+
+  void _cancelRcExtraction() {
+    if (!_rcExtracting) return;
+    setState(() {
+      _rcRequestCancelled = true;
+      _rcRequestSerial++;
+      _rcExtracting = false;
+      if (_rcController.text.trim() == 'Extracting...') {
+        _rcController.clear();
+      }
+    });
+  }
+
+  void _cycleDlCandidate() {
+    if (_dlCandidates.length <= 1) return;
+    setState(() {
+      _dlCandidateIndex = (_dlCandidateIndex + 1) % _dlCandidates.length;
+      _dlController.text = _dlCandidates[_dlCandidateIndex];
+      _dlController.selection = TextSelection.collapsed(offset: _dlController.text.length);
+    });
+  }
+
+  bool _isAllowedImageFilename(String filename) {
+    final ext = p.extension(filename).toLowerCase();
+    return ext == '.jpg' ||
+        ext == '.jpeg' ||
+        ext == '.png' ||
+        ext == '.webp' ||
+        ext == '.bmp' ||
+        ext == '.gif';
+  }
+
+
+  String _normalizeOcrText(String text) {
+    return text.replaceAll(RegExp(r'\s+'), '').toUpperCase();
+  }
+
+  Widget? _buildDlSuffixIcon() {
+    if (_dlExtracting) {
+      return IconButton(
+        tooltip: 'Cancel extraction',
+        icon: const Icon(Icons.close),
+        onPressed: _cancelDlExtraction,
+      );
+    }
+
+    if (_dlCandidates.length > 1) {
+      final countLabel = '${_dlCandidateIndex + 1}/${_dlCandidates.length}';
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(right: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue.shade100),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  margin: const EdgeInsets.only(right: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade700,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                Text(
+                  countLabel,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Show next DL candidate',
+            icon: const Icon(Icons.swap_horiz),
+            onPressed: _cycleDlCandidate,
+          ),
+        ],
+      );
+    }
+
+    if (_lastDlXFile != null || _lastDlPFile != null) {
+      return IconButton(
+        tooltip: 'Refresh DL OCR',
+        icon: const Icon(Icons.refresh),
+        onPressed: () async {
+          File? dlFile;
+          if (!kIsWeb) {
+            if (_lastDlXFile != null && _lastDlXFile!.path.isNotEmpty) {
+              dlFile = File(_lastDlXFile!.path);
+            } else if (_lastDlPFile != null && _lastDlPFile!.path != null && _lastDlPFile!.path!.isNotEmpty) {
+              dlFile = File(_lastDlPFile!.path!);
+            }
+          }
+          if (dlFile == null) {
+            _showErrorSnackBar('Unable to reload the selected DL image.');
+            return;
+          }
+          _dlController.clear();
+          await _extractDlFromService(dlFile);
+        },
+      );
+    }
+
+    return null;
+  }
+
+  Widget? _buildRcSuffixIcon() {
+    if (_rcExtracting) {
+      return IconButton(
+        tooltip: 'Cancel extraction',
+        icon: const Icon(Icons.close),
+        onPressed: _cancelRcExtraction,
+      );
+    }
+
+    if (_lastRcXFile != null || _lastRcPFile != null) {
+      return IconButton(
+        tooltip: 'Refresh RC OCR',
+        icon: const Icon(Icons.refresh),
+        onPressed: _refreshRcExtraction,
+      );
+    }
+
+    return null;
+  }
+
   // OCR model endpoints (use the exact working paths)
-  final String _dlOcrUrl = 'https://dl-extractor-web-980624091991.us-central1.run.app/extract';
 
   // RC API endpoint
-  final String _rcOcrUrl = 'https://enhanced-alpr-980624091991.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
-  final String _dlOcrFieldName = 'file';
-  final String _rcOcrFieldName = 'file';
   // ================================================
 
   // App theme colors to match government portal
@@ -88,203 +394,6 @@ class _HomePageContentState extends State<HomePageContent> {
     return false;
   }
 
-  // ----------------- Helpers: create MultipartFile ---------------------
-  // Determine media type from filename extension; return null if unknown/non-image
-  MediaType? _mediaTypeForFilename(String filename) {
-    final ext = p.extension(filename).toLowerCase();
-    if (ext == '.jpg' || ext == '.jpeg') return MediaType('image', 'jpeg');
-    if (ext == '.png') return MediaType('image', 'png');
-    if (ext == '.webp') return MediaType('image', 'webp');
-    if (ext == '.bmp') return MediaType('image', 'bmp');
-    if (ext == '.gif') return MediaType('image', 'gif');
-    // Add other image types if needed
-    return null;
-  }
-
-  bool _isImageFilename(String filename) => _mediaTypeForFilename(filename) != null;
-
-  Future<http.MultipartFile?> _makeMultipartFromPicked({
-    required String fieldName,
-    XFile? xfile,
-    PlatformFile? pfile,
-  }) async {
-    try {
-      String? filename;
-      if (!kIsWeb && xfile != null && xfile.path.isNotEmpty) {
-        filename = p.basename(xfile.path);
-        final mediaType = _mediaTypeForFilename(filename);
-        if (mediaType != null) {
-          return await http.MultipartFile.fromPath(
-            fieldName,
-            xfile.path,
-            filename: filename,
-            contentType: mediaType,
-          );
-        } else {
-          // if unknown extension, still try to send (server might accept), but prefer bytes fallback
-          final bytes = await xfile.readAsBytes();
-          final fallbackName = xfile.name.isNotEmpty ? xfile.name : filename;
-          final fallbackMedia = _mediaTypeForFilename(fallbackName ?? '');
-          if (fallbackMedia != null) {
-            return http.MultipartFile.fromBytes(fieldName, bytes, filename: fallbackName, contentType: fallbackMedia);
-          } else {
-            // unknown/unsupported: return null so caller can skip quickly
-            return null;
-          }
-        }
-      }
-
-      if (pfile != null) {
-        filename = pfile.name;
-        final mediaType = _mediaTypeForFilename(filename);
-        if (mediaType != null) {
-          if (pfile.bytes != null) {
-            return http.MultipartFile.fromBytes(fieldName, pfile.bytes!, filename: filename, contentType: mediaType);
-          } else if (pfile.path != null && pfile.path!.isNotEmpty) {
-            return await http.MultipartFile.fromPath(fieldName, pfile.path!, filename: filename, contentType: mediaType);
-          }
-        } else {
-          // not an image (e.g., pdf). Return null quickly.
-          return null;
-        }
-      }
-
-      if (xfile != null) {
-        // fallback reading bytes for web or if path wasn't available earlier
-        final bytes = await xfile.readAsBytes();
-        final fallbackName = xfile.name;
-        final mediaType = _mediaTypeForFilename(fallbackName);
-        if (mediaType != null) {
-          return http.MultipartFile.fromBytes(fieldName, bytes, filename: fallbackName, contentType: mediaType);
-        } else {
-          return null;
-        }
-      }
-    } catch (e) {
-      devLog('[_makeMultipartFromPicked] error: $e');
-    }
-    return null;
-  }
-
-  Future<void> _uploadForOcrAndFill({
-    required String uploadUrl,
-    required String primaryFieldName,
-    required bool isDlModel,
-    XFile? xfile,
-    PlatformFile? pfile,
-    required ValueSetter<String?> setFileName,
-    required TextEditingController controller,
-    required VoidCallback setExtractingTrue,
-    required VoidCallback setExtractingFalse,
-  }) async {
-    setExtractingTrue();
-    controller.text = 'Extracting...';
-
-    try {
-      final Uri uri = Uri.parse(uploadUrl);
-
-      // QUICK CHECK: if RC endpoint, ensure chosen file is an image (avoid repeated 400s)
-      String? chosenName;
-      if (_lastRcPFile != null || _lastRcXFile != null || _lastDlPFile != null || _lastDlXFile != null) {
-        // determine for current call which file is being used (prioritize xfile/pfile args)
-        if (xfile != null) chosenName = xfile.name.isNotEmpty ? xfile.name : p.basename(xfile.path);
-        else if (pfile != null) chosenName = pfile.name;
-      }
-
-      if (!isDlModel) {
-        // RC endpoint requires an image — if filename extension isn't an image, bail fast
-        if (chosenName != null && !_isImageFilename(chosenName)) {
-          controller.text = '';
-          _showErrorSnackBar('Selected file is not a supported image. Please choose JPG/PNG for number plate detection.');
-          setExtractingFalse();
-          return;
-        }
-      }
-
-      // FIX: Cleaned up logic. No loop, no URL rewriting. Just use the primary field.
-      final mp = await _makeMultipartFromPicked(fieldName: primaryFieldName, xfile: xfile, pfile: pfile);
-      if (mp == null) {
-        devLog('Could not build multipart for field "$primaryFieldName"');
-        _showErrorSnackBar('Failed to process image file.');
-        setExtractingFalse();
-        return;
-      }
-
-      final req = http.MultipartRequest('POST', uri);
-      req.files.add(mp);
-
-      devLog('Posting to $uploadUrl (field="$primaryFieldName")');
-
-      try {
-        final streamed = await req.send();
-        final res = await http.Response.fromStream(streamed);
-
-        devLog('Response status ${res.statusCode} from $uploadUrl');
-
-        if (res.statusCode == 200) {
-          final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
-          String? extractedValue;
-
-          if (isDlModel) {
-            // DL Model Response Handling
-            // 1) prefer dl_numbers[0] (New API standard)
-            if (body != null && body['dl_numbers'] is List && (body['dl_numbers'] as List).isNotEmpty) {
-              final first = (body['dl_numbers'] as List).first;
-              if (first != null && first is String && first.trim().isNotEmpty) {
-                extractedValue = first.trim();
-              }
-            }
-
-            // 2) fallback to extracted_text if exists
-            if (extractedValue == null && body != null && body['extracted_text'] != null) {
-              final t = (body['extracted_text'] as String).trim();
-              if (t.isNotEmpty) extractedValue = t;
-            }
-
-          } else {
-            // RC model (enhanced-alpr)
-            if (body != null && body['results'] is List && (body['results'] as List).isNotEmpty) {
-              final firstPlate = (body['results'] as List)[0];
-              if (firstPlate is Map) {
-                final plateTextRaw = (firstPlate['plate_text'] ?? '').toString().trim();
-                if (plateTextRaw.isNotEmpty) {
-                  extractedValue = plateTextRaw;
-                }
-              }
-            }
-          }
-
-          if (extractedValue != null && extractedValue.isNotEmpty) {
-            controller.text = extractedValue;
-            if (body != null && body['filename'] != null) {
-              setFileName(body['filename'] as String);
-            }
-            devLog('OCR success, extracted="$extractedValue"');
-          } else {
-            devLog('OCR returned 200 but no usable text. Body: ${res.body}');
-            controller.text = '';
-            _showErrorSnackBar('Could not extract text from the image.');
-          }
-        } else {
-          devLog('OCR failed with status ${res.statusCode}. Body: ${res.body}');
-          controller.text = '';
-          _showErrorSnackBar('OCR Service Failed (${res.statusCode})');
-        }
-      } catch (e) {
-        devLog('Exception during OCR POST: $e');
-        controller.text = '';
-        _showErrorSnackBar('Connection error: $e');
-      }
-
-    } catch (err) {
-      controller.text = '';
-      devLog('General error in upload: $err');
-      _showErrorSnackBar('An error occurred while communicating with the OCR service.');
-    } finally {
-      setExtractingFalse();
-    }
-  }
-
   // ----------------- Pick handlers (camera/gallery/file) --------------
 
   Future<void> _pickDlImage() async {
@@ -302,17 +411,14 @@ class _HomePageContentState extends State<HomePageContent> {
             _dlImageName = picked.name;
             _lastDlXFile = picked;
             _lastDlPFile = null;
+            _dlCandidates = [];
+            _dlCandidateIndex = 0;
+            _dlController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _dlOcrUrl,
-            primaryFieldName: _dlOcrFieldName,
-            isDlModel: true,
-            xfile: picked,
-            setFileName: (s) => setState(() => _dlImageName = s),
-            controller: _dlController,
-            setExtractingTrue: () => setState(() => _dlExtracting = true),
-            setExtractingFalse: () => setState(() => _dlExtracting = false),
-          );
+
+          if (!kIsWeb) {
+            await _extractDlFromService(File(picked.path));
+          }
         }
       },
       onGallery: () async {
@@ -327,39 +433,34 @@ class _HomePageContentState extends State<HomePageContent> {
             _dlImageName = picked.name;
             _lastDlXFile = picked;
             _lastDlPFile = null;
+            _dlCandidates = [];
+            _dlCandidateIndex = 0;
+            _dlController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _dlOcrUrl,
-            primaryFieldName: _dlOcrFieldName,
-            isDlModel: true,
-            xfile: picked,
-            setFileName: (s) => setState(() => _dlImageName = s),
-            controller: _dlController,
-            setExtractingTrue: () => setState(() => _dlExtracting = true),
-            setExtractingFalse: () => setState(() => _dlExtracting = false),
-          );
+
+          if (!kIsWeb) {
+            await _extractDlFromService(File(picked.path));
+          }
         }
       },
       onFile: () async {
         final result = await FilePicker.platform.pickFiles(
-          type: FileType.custom,
-          allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+          type: FileType.image,
           withData: true,
         );
         if (result != null && result.files.isNotEmpty) {
           final pfile = result.files.single;
+
+          if (!_isAllowedImageFilename(pfile.name)) {
+            _showErrorSnackBar('Please choose a JPG/PNG image for OCR.');
+            return;
+          }
+
           // SECURITY: Validate Magic Bytes (if file path exists)
           if (!kIsWeb && pfile.path != null) {
             if (!await Validators.isValidImage(File(pfile.path!))) {
-              // If it's a PDF, isValidImage returns false (as it checks for images).
-              // If you support PDF uploading, you might need a separate check or relax this.
-              // Assuming Strict Image Policy for now based on previous context,
-              // but if PDF is allowed by FilePicker above, we must check if it really is an image or handle PDF separately.
-              // For now, we only validate if the extension suggests it is an image.
-              if (_isImageFilename(pfile.name)) {
-                _showErrorSnackBar('Security Error: Invalid image file.');
-                return;
-              }
+              _showErrorSnackBar('Security Error: Invalid image file.');
+              return;
             }
           }
 
@@ -367,17 +468,13 @@ class _HomePageContentState extends State<HomePageContent> {
             _dlImageName = pfile.name;
             _lastDlPFile = pfile;
             _lastDlXFile = null;
+            _dlCandidates = [];
+            _dlCandidateIndex = 0;
+            _dlController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _dlOcrUrl,
-            primaryFieldName: _dlOcrFieldName,
-            isDlModel: true,
-            pfile: pfile,
-            setFileName: (s) => setState(() => _dlImageName = s),
-            controller: _dlController,
-            setExtractingTrue: () => setState(() => _dlExtracting = true),
-            setExtractingFalse: () => setState(() => _dlExtracting = false),
-          );
+          if (pfile.path != null && pfile.path!.isNotEmpty) {
+            await _extractDlFromService(File(pfile.path!));
+          }
         }
       },
     );
@@ -398,17 +495,11 @@ class _HomePageContentState extends State<HomePageContent> {
             _rcImageName = picked.name;
             _lastRcXFile = picked;
             _lastRcPFile = null;
+            _rcController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _rcOcrUrl,
-            primaryFieldName: _rcOcrFieldName,
-            isDlModel: false,
-            xfile: picked,
-            setFileName: (s) => setState(() => _rcImageName = s),
-            controller: _rcController,
-            setExtractingTrue: () => setState(() => _rcExtracting = true),
-            setExtractingFalse: () => setState(() => _rcExtracting = false),
-          );
+          if (!kIsWeb) {
+            await _extractRcFromService(File(picked.path));
+          }
         }
       },
       onGallery: () async {
@@ -423,29 +514,28 @@ class _HomePageContentState extends State<HomePageContent> {
             _rcImageName = picked.name;
             _lastRcXFile = picked;
             _lastRcPFile = null;
+            _rcController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _rcOcrUrl,
-            primaryFieldName: _rcOcrFieldName,
-            isDlModel: false,
-            xfile: picked,
-            setFileName: (s) => setState(() => _rcImageName = s),
-            controller: _rcController,
-            setExtractingTrue: () => setState(() => _rcExtracting = true),
-            setExtractingFalse: () => setState(() => _rcExtracting = false),
-          );
+          if (!kIsWeb) {
+            await _extractRcFromService(File(picked.path));
+          }
         }
       },
       onFile: () async {
         final result = await FilePicker.platform.pickFiles(
-          type: FileType.custom,
-          allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+          type: FileType.image,
           withData: true,
         );
         if (result != null && result.files.isNotEmpty) {
           final pfile = result.files.single;
+
+          if (!_isAllowedImageFilename(pfile.name)) {
+            _showErrorSnackBar('Please choose a JPG/PNG image for OCR.');
+            return;
+          }
+
           // SECURITY: Validate Magic Bytes if path exists and it claims to be an image
-          if (!kIsWeb && pfile.path != null && _isImageFilename(pfile.name)) {
+          if (!kIsWeb && pfile.path != null) {
             if (!await Validators.isValidImage(File(pfile.path!))) {
               _showErrorSnackBar('Security Error: Invalid image file.');
               return;
@@ -455,17 +545,11 @@ class _HomePageContentState extends State<HomePageContent> {
             _rcImageName = pfile.name;
             _lastRcPFile = pfile;
             _lastRcXFile = null;
+            _rcController.clear();
           });
-          await _uploadForOcrAndFill(
-            uploadUrl: _rcOcrUrl,
-            primaryFieldName: _rcOcrFieldName,
-            isDlModel: false,
-            pfile: pfile,
-            setFileName: (s) => setState(() => _rcImageName = s),
-            controller: _rcController,
-            setExtractingTrue: () => setState(() => _rcExtracting = true),
-            setExtractingFalse: () => setState(() => _rcExtracting = false),
-          );
+          if (pfile.path != null && pfile.path!.isNotEmpty) {
+            await _extractRcFromService(File(pfile.path!));
+          }
         }
       },
     );
@@ -478,17 +562,22 @@ class _HomePageContentState extends State<HomePageContent> {
       return;
     }
 
-    await _uploadForOcrAndFill(
-      uploadUrl: _rcOcrUrl,
-      primaryFieldName: _rcOcrFieldName,
-      isDlModel: false,
-      xfile: _lastRcXFile,
-      pfile: _lastRcPFile,
-      setFileName: (s) => setState(() => _rcImageName = s),
-      controller: _rcController,
-      setExtractingTrue: () => setState(() => _rcExtracting = true),
-      setExtractingFalse: () => setState(() => _rcExtracting = false),
-    );
+    File? rcFile;
+    if (!kIsWeb) {
+      if (_lastRcXFile != null && _lastRcXFile!.path.isNotEmpty) {
+        rcFile = File(_lastRcXFile!.path);
+      } else if (_lastRcPFile != null && _lastRcPFile!.path != null && _lastRcPFile!.path!.isNotEmpty) {
+        rcFile = File(_lastRcPFile!.path!);
+      }
+    }
+
+    if (rcFile == null) {
+      _showErrorSnackBar('Unable to reload the selected RC image.');
+      return;
+    }
+
+    _rcController.clear();
+    await _extractRcFromService(rcFile);
   }
 
   Future<void> _pickDriverImage() async {
@@ -585,8 +674,8 @@ class _HomePageContentState extends State<HomePageContent> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.upload_file),
-                  title: const Text('Choose file (Files)'),
-                  subtitle: const Text('Images and PDFs'),
+                  title: const Text('Choose image file'),
+                  subtitle: const Text('Images only'),
                   onTap: () {
                     Navigator.of(ctx).pop();
                     onFile();
@@ -849,7 +938,9 @@ class _HomePageContentState extends State<HomePageContent> {
                         label: 'Driving License Number',
                         hint: _dlExtracting ? 'Extracting...' : 'Select image or enter manually',
                         prefixIcon: Icons.confirmation_number,
-                        enabled: !_dlExtracting,
+                        enabled: true,
+                        readOnly: _dlExtracting,
+                        suffixIconWidget: _buildDlSuffixIcon(),
                         // VALIDATION: Only check regex if field is populated (optional field logic)
                         validator: (v) => (v != null && v.trim().isNotEmpty)
                             ? Validators.validateID(v, type: 'DL Number')
@@ -881,10 +972,9 @@ class _HomePageContentState extends State<HomePageContent> {
                         label: 'Vehicle Number',
                         hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
                         prefixIcon: Icons.directions_car,
-                        enabled: !_rcExtracting,
-                        // Show refresh button when an RC image is present; pressing it will re-call the RC API.
-                        showAlternateButton: (_lastRcXFile != null || _lastRcPFile != null),
-                        onAlternatePressed: _refreshRcExtraction,
+                        enabled: true,
+                        readOnly: _rcExtracting,
+                        suffixIconWidget: _buildRcSuffixIcon(),
                         // VALIDATION
                         validator: (v) => (v != null && v.trim().isNotEmpty)
                             ? Validators.validateID(v, type: 'Vehicle Number')
@@ -1127,25 +1217,22 @@ class _HomePageContentState extends State<HomePageContent> {
     required String hint,
     required IconData prefixIcon,
     bool enabled = true,
-    bool showAlternateButton = false,
-    VoidCallback? onAlternatePressed,
+    bool readOnly = false,
+    Widget? suffixIconWidget,
     String? Function(String?)? validator, // ADDED VALIDATOR PARAM
   }) {
     return TextFormField(
       controller: controller,
       enabled: enabled,
+      readOnly: readOnly,
       validator: validator, // PASSED VALIDATOR
       style: const TextStyle(fontSize: 14),
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         prefixIcon: Icon(prefixIcon, size: 18),
-        suffixIcon: showAlternateButton
-            ? IconButton(
-          icon: const Icon(Icons.refresh),
-          onPressed: onAlternatePressed,
-        )
-            : null,
+        suffixIcon: suffixIconWidget,
+        suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         filled: true,
         fillColor: Colors.grey.shade50,
         border: OutlineInputBorder(

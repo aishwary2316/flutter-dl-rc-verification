@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../utils/safe_error.dart';
 import '../services/api_service.dart';
 
+import 'rcdata.dart';
+
 /// Enum for per-field states (top-level; must not be declared inside a class)
 enum FieldState { normal, suspicious, missing, serviceUnavailable }
 
@@ -120,6 +122,74 @@ Future<void> showVerificationDialog(
     if (dlNumber != null) bodyMap['dlData'] = {'status': 'ERROR', 'message': msg};
     if (rcNumber != null) bodyMap['rcData'] = {'status': 'ERROR', 'message': msg};
   }
+
+  // ------------------- NEW: Fetch AishTrex (api2) and merge selected fields -------------------
+  // We only do this when an RC number was provided
+  if (rcNumber != null && rcNumber.trim().isNotEmpty) {
+    try {
+      final aRes = await api.getVehicleDetails(rcNumber.trim());
+      if (aRes['ok'] == true && aRes['data'] is Map) {
+        final Map<String, dynamic> aBody = Map<String, dynamic>.from(aRes['data']);
+        Map<String, dynamic>? vehicle;
+
+        // Try common shapes: decrypted -> VehicleDetails, or top-level VehicleDetails
+        if (aBody.containsKey('decrypted') && aBody['decrypted'] is Map) {
+          final decrypted = aBody['decrypted'] as Map;
+          if (decrypted['VehicleDetails'] is Map) {
+            vehicle = Map<String, dynamic>.from(decrypted['VehicleDetails']);
+          } else if (decrypted['vehicleDetails'] is Map) {
+            vehicle = Map<String, dynamic>.from(decrypted['vehicleDetails']);
+          }
+        } else if (aBody['VehicleDetails'] is Map) {
+          vehicle = Map<String, dynamic>.from(aBody['VehicleDetails']);
+        } else if (aBody['vehicleDetails'] is Map) {
+          vehicle = Map<String, dynamic>.from(aBody['vehicleDetails']);
+        }
+
+        if (vehicle != null) {
+          bodyMap['rcData'] = bodyMap['rcData'] is Map ? Map<String, dynamic>.from(bodyMap['rcData']) : <String, dynamic>{};
+
+          // Only pull these specific fields from AishTrex (if present)
+          final fieldsToCopy = [
+            'rc_owner_name',
+            'rc_regn_no',
+            'rc_vhclass_desc',
+            'rc_color',
+            'rc_blacklist_status',
+          ];
+
+          for (final f in fieldsToCopy) {
+            if (vehicle.containsKey(f) && vehicle[f] != null) {
+              bodyMap['rcData'][f] = vehicle[f];
+            }
+          }
+
+          // preserve existing 'status' and 'crime_involved' from your backend if present (do NOT overwrite)
+          if (!(bodyMap['rcData'] as Map).containsKey('status') && vehicle.containsKey('rc_status')) {
+            bodyMap['rcData']['status'] = vehicle['rc_status'];
+          }
+          if (!(bodyMap['rcData'] as Map).containsKey('crime_involved') && vehicle.containsKey('crime_involved')) {
+            bodyMap['rcData']['crime_involved'] = vehicle['crime_involved'];
+          }
+
+          // store full AishTrex vehicle object for "Read More" page
+          bodyMap['rcData']['aishtrex_full'] = vehicle;
+        } else {
+          // Unexpected shape from AishTrex — attach raw for inspection
+          bodyMap['rcData'] = bodyMap['rcData'] ?? <String, dynamic>{};
+          bodyMap['rcData']['aish_error'] = aBody;
+        }
+      } else {
+        // AishTrex returned error (attach message)
+        bodyMap['rcData'] = bodyMap['rcData'] ?? <String, dynamic>{};
+        bodyMap['rcData']['aish_error'] = aRes['message'] ?? 'AishTrex lookup failed';
+      }
+    } catch (e) {
+      bodyMap['rcData'] = bodyMap['rcData'] ?? <String, dynamic>{};
+      bodyMap['rcData']['aish_error'] = SafeError.format(e, fallback: 'AishTrex network error');
+    }
+  }
+  // ------------------- END merging AishTrex -------------------
 
   // Perform face recognition separately if a driver image is provided
   if (driverImage != null) {
@@ -705,8 +775,8 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
                   title: 'Vehicle Registration',
                   icon: Icons.directions_car,
                   data: rcData,
-                  primaryKeys: ['owner_name', 'regn_number'],
-                  detailsKeys: ['status', 'verification', 'maker_class', 'vehicle_class', 'engine_number', 'chassis_number', 'crime_involved'],
+                  primaryKeys: ['rc_owner_name', 'rc_regn_no'],
+                  detailsKeys: ['rc_vhclass_desc', 'rc_color', 'rc_blacklist_status', 'crime_involved', 'status'],
                   color: Colors.green,
                 ),
 
@@ -917,6 +987,30 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
                     ),
                   ),
                 ],
+              ),
+
+            // Read More button for Vehicle Registration which opens RCData page
+            if (title == 'Vehicle Registration' && data['aishtrex_full'] != null)
+              Padding(
+                padding: EdgeInsets.only(top: 8 * s),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text("Read More"),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => RCDataPage(
+                            aishtrex: data['aishtrex_full'],
+                            backend: data,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
           ]),
         ),

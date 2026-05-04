@@ -9,7 +9,7 @@ import '../utils/safe_error.dart';
 
 class ApiService {
   // === Set this correctly for your environment ===
-  static const String backendBaseUrl = 'https://ai-tollgate-surveillance-1.onrender.com';
+  static const String backendBaseUrl = 'https://api2.aishtrex.com';
 
   final HashService _hasher = HashService();
 
@@ -30,6 +30,131 @@ class ApiService {
   // New Keys for Session Management
   static const String _kLoginTime = 'login_timestamp';
   static const String _kLastActive = 'last_active_timestamp';
+
+  // Constants for api.aishtrex.com - Vehicle details api
+  static const String _aishTokenKey = 'aish_token';
+  static const String _aishTokenExpiry = 'aish_token_expiry';
+
+  static const String _aishTokenUrl = 'https://api.aishtrex.com/proxy-api';
+  static const String _aishVehicleUrl = 'https://api2.aishtrex.com/api/getRCDetails';
+
+  static const String _aishApiKey = 'testing';
+  static const String _clientId = 'NagalandPolice';
+
+  // Aishtrex token helper (internal)
+  Future<String?> _getAishToken() async {
+    try {
+      final storedToken = await _secureStorage.read(key: _aishTokenKey);
+      final expiryStr = await _secureStorage.read(key: _aishTokenExpiry);
+
+      if (storedToken != null && expiryStr != null) {
+        final expiry = DateTime.tryParse(expiryStr);
+        if (expiry != null && DateTime.now().isBefore(expiry)) {
+          return storedToken;
+        }
+      }
+
+      final uri = Uri.parse(_aishTokenUrl);
+
+      final resp = await http.post(
+        uri,
+        headers: {
+          'x-api-key': _aishApiKey,
+          'Content-Type': 'application/json'
+        },
+      ).timeout(const Duration(seconds: 15));
+
+      final body = _safeJson(resp.body);
+
+      if (resp.statusCode == 200 && body['access_token'] != null) {
+        final token = body['access_token'];
+
+        final expiresIn = body['expires_in'] ?? 3600;
+
+        final expiry =
+        DateTime.now().add(Duration(seconds: expiresIn - 60));
+
+        await _secureStorage.write(key: _aishTokenKey, value: token);
+        await _secureStorage.write(
+            key: _aishTokenExpiry, value: expiry.toIso8601String());
+
+        return token;
+      }
+
+      return null;
+    } catch (e) {
+      devLog("Aishtrex token error: $e");
+      return null;
+    }
+  }
+
+  // single vehicle lookup function
+  Future<Map<String, dynamic>> getVehicleDetails(String regNo) async {
+    try {
+      final aishtoken = await _getAishToken();
+      final jwtToken = await getToken();
+
+      if (aishtoken == null) {
+        return {
+          'ok': false,
+          'message': 'Unable to get authorization token'
+        };
+      }
+
+      if (jwtToken == null || jwtToken.isEmpty) {
+        return {
+          'ok': false,
+          'message': 'User not authenticated (JWT missing)'
+        };
+      }
+
+      final uri = Uri.parse(_aishVehicleUrl);
+
+      final resp = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'accept': 'application/json',
+          //'x-api-key': _aishApiKey,
+          'token': 'Bearer $aishtoken',
+          'Authorization': 'Bearer $jwtToken'
+        },
+        body: jsonEncode({
+          "regNo": regNo,
+          "clientId": _clientId
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      final body = _safeJson(resp.body);
+
+      if (resp.statusCode == 200) {
+        return {
+          'ok': true,
+          'data': body,
+          'status': resp.statusCode
+        };
+      }
+
+      if (resp.statusCode == 401) {
+        await _secureStorage.delete(key: _aishTokenKey);
+        await _secureStorage.delete(key: _aishTokenExpiry);
+
+        return await getVehicleDetails(regNo);
+      }
+
+      return {
+        'ok': false,
+        'message': body['message'] ?? 'Vehicle lookup failed',
+        'status': resp.statusCode
+      };
+    } catch (e) {
+      return {
+        'ok': false,
+        'message': SafeError.format(e,
+            fallback: "Vehicle lookup failed due to network issue")
+      };
+    }
+  }
 
 
 
@@ -154,15 +279,15 @@ class ApiService {
   // -----------------------------
   // VERIFY (multipart) - improved
   // -----------------------------
-  Future<Map<String, dynamic>> verifyDriver({
-    String? dlNumber,
-    String? rcNumber,
-    String? location,
-    String? tollgate,
-    File? driverImage,
-  }) async {
-    final token = await getToken();
-    final uri = Uri.parse('$backendBaseUrl/api/verify');
+        Future<Map<String, dynamic>> verifyDriver({
+          String? dlNumber,
+          String? rcNumber,
+          String? location,
+          String? tollgate,
+          File? driverImage,
+        }) async {
+        final token = await getToken();
+        final uri = Uri.parse('$backendBaseUrl/api/verify');
     final request = http.MultipartRequest('POST', uri);
     if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
     request.headers['accept'] = 'application/json';
@@ -201,8 +326,11 @@ class ApiService {
   // -----------------------------
   // OCR endpoints (multipart)
   // -----------------------------
+
+
   Future<Map<String, dynamic>> ocrDL(File dlImage) async {
-    final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
+    //final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
+    final uri = Uri.parse('https://ml-model-service-831062770462.us-central1.run.app/extract');
     final request = http.MultipartRequest('POST', uri);
     request.headers['accept'] = 'application/json';
 

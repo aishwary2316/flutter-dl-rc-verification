@@ -25,7 +25,7 @@ class UserManagementPage extends StatefulWidget {
 }
 
 class _UserManagementPageState extends State<UserManagementPage> {
-  static const String BASE_URL = 'https://ai-tollgate-surveillance-1.onrender.com';
+  static const String BASE_URL = 'https://api2.aishtrex.com';
 
   bool _loading = true;
   String? _error;
